@@ -5,25 +5,26 @@
  */
 
 import * as jose from 'jose';
-import { readFileSync, existsSync } from 'fs';
-import { join } from 'path';
+import { getOAuthToken, saveOAuthToken } from './supabase';
 
 const DOCUSIGN_BASE_URL = process.env.DOCUSIGN_BASE_URI || 'https://demo.docusign.net';
 const DOCUSIGN_OAUTH_URL = DOCUSIGN_BASE_URL.includes('demo')
   ? 'https://account-d.docusign.com'
   : 'https://account.docusign.com';
 
-// Token storage path
-const TOKEN_PATH = join(process.cwd(), '.docusign-tokens.json');
-
-// Try to get stored OAuth tokens (from Authorization Code Grant)
-function getStoredTokens(): { access_token: string; refresh_token?: string; expires_at: number } | null {
+// Try to get stored OAuth tokens (from Supabase database)
+async function getStoredTokens(): Promise<{ access_token: string; refresh_token?: string; expires_at: number } | null> {
   try {
-    if (existsSync(TOKEN_PATH)) {
-      const data = JSON.parse(readFileSync(TOKEN_PATH, 'utf-8'));
+    const token = await getOAuthToken('docusign');
+    if (token) {
+      const expiresAt = new Date(token.expires_at).getTime();
       // Check if token is still valid (with 5 min buffer)
-      if (data.expires_at && Date.now() < data.expires_at - 5 * 60 * 1000) {
-        return data;
+      if (expiresAt && Date.now() < expiresAt - 5 * 60 * 1000) {
+        return {
+          access_token: token.access_token,
+          refresh_token: token.refresh_token,
+          expires_at: expiresAt,
+        };
       }
       // Token expired, try to refresh
       console.log('Stored token expired, will try to refresh or use JWT');
@@ -37,10 +38,8 @@ function getStoredTokens(): { access_token: string; refresh_token?: string; expi
 // Refresh OAuth token using refresh_token
 async function refreshStoredToken(): Promise<string | null> {
   try {
-    if (!existsSync(TOKEN_PATH)) return null;
-
-    const data = JSON.parse(readFileSync(TOKEN_PATH, 'utf-8'));
-    if (!data.refresh_token) return null;
+    const storedToken = await getOAuthToken('docusign');
+    if (!storedToken?.refresh_token) return null;
 
     const integrationKey = process.env.DOCUSIGN_INTEGRATION_KEY;
     const secretKey = process.env.DOCUSIGN_SECRET_KEY;
@@ -55,7 +54,7 @@ async function refreshStoredToken(): Promise<string | null> {
       },
       body: new URLSearchParams({
         grant_type: 'refresh_token',
-        refresh_token: data.refresh_token,
+        refresh_token: storedToken.refresh_token,
       }),
     });
 
@@ -66,15 +65,13 @@ async function refreshStoredToken(): Promise<string | null> {
 
     const tokens = await response.json();
 
-    // Update stored tokens
-    const { writeFileSync } = await import('fs');
-    const newData = {
+    // Update stored tokens in Supabase
+    await saveOAuthToken({
+      provider: 'docusign',
       access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token || data.refresh_token,
-      expires_at: Date.now() + (tokens.expires_in * 1000),
-      token_type: tokens.token_type,
-    };
-    writeFileSync(TOKEN_PATH, JSON.stringify(newData, null, 2));
+      refresh_token: tokens.refresh_token || storedToken.refresh_token,
+      expires_at: new Date(Date.now() + (tokens.expires_in * 1000)).toISOString(),
+    });
 
     console.log('DocuSign token refreshed successfully');
     return tokens.access_token;
@@ -155,8 +152,8 @@ let cachedToken: { token: string; expiresAt: number } | null = null;
 
 // Get access token - tries stored OAuth tokens first, then falls back to JWT Grant
 async function getAccessToken(): Promise<string> {
-  // 1. Check for stored OAuth tokens first (from Authorization Code Grant)
-  const storedTokens = getStoredTokens();
+  // 1. Check for stored OAuth tokens first (from Supabase)
+  const storedTokens = await getStoredTokens();
   if (storedTokens) {
     console.log('Using stored OAuth access token');
     return storedTokens.access_token;

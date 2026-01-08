@@ -24,8 +24,23 @@ export async function POST(request: NextRequest) {
 
     console.log('Generating original plain-text DOCX for Word Compare...');
 
+    // DEBUG: Check for smart quotes in input
+    const hasSmartQuotesBefore = /[\u201C\u201D\u2018\u2019]/.test(originalText);
+    console.log(`[ORIGINAL-DOCX] Input has smart quotes: ${hasSmartQuotesBefore}`);
+    console.log(`[ORIGINAL-DOCX] Sample input: ${originalText.substring(0, 150).replace(/\n/g, ' ')}`);
+
     // Normalize text to match Word's character encoding
     const normalizedText = normalizeForWord(originalText);
+
+    // DEBUG: Check after normalization
+    const hasSmartQuotesAfter = /[\u201C\u201D\u2018\u2019]/.test(normalizedText);
+    console.log(`[ORIGINAL-DOCX] After normalize has smart quotes: ${hasSmartQuotesAfter}`);
+    console.log(`[ORIGINAL-DOCX] Sample output: ${normalizedText.substring(0, 150).replace(/\n/g, ' ')}`);
+    if (hasSmartQuotesBefore && !hasSmartQuotesAfter) {
+      console.log('[ORIGINAL-DOCX] SUCCESS: Smart quotes removed!');
+    } else if (hasSmartQuotesBefore && hasSmartQuotesAfter) {
+      console.log('[ORIGINAL-DOCX] ERROR: Normalization failed to remove smart quotes!');
+    }
 
     // Build document with IDENTICAL formatting to revised version
     const doc = new Document({
@@ -89,16 +104,30 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * Normalize text for Word document.
+ * Normalize Unicode characters to ASCII equivalents for Word.
  *
- * IMPORTANT: Do NOT convert quotes, dashes, or other characters!
- * Converting creates character mismatches that cause Word Compare
- * to show spurious "strike and re-insert same word" changes.
+ * CRITICAL: This MUST match the normalizeToASCII function in route.ts
+ * and normalizeForWord in generate-docx/route.ts.
  *
- * This MUST match the normalizeForWord() in generate-docx/route.ts
+ * Both ORIGINAL-PLAIN.docx and REVISED.docx must use identical encoding
+ * to prevent Word Compare from showing spurious strike/reinsert changes.
  */
 function normalizeForWord(text: string): string {
-  // Pass through unchanged - preserve exact character encoding
-  // Both ORIGINAL-PLAIN.docx and REVISED.docx must use identical text
-  return text;
+  return text
+    // Smart double quotes → straight double quote
+    .replace(/[\u201C\u201D\u201E\u201F\u2033\u2036\u00AB\u00BB]/g, '"')
+    // Smart single quotes, apostrophes → straight single quote
+    .replace(/[\u2018\u2019\u201A\u201B\u2032\u2035\u2039\u203A]/g, "'")
+    // En dash, em dash, horizontal bar, minus sign → hyphen
+    .replace(/[\u2013\u2014\u2015\u2212]/g, '-')
+    // Non-breaking space, various Unicode spaces → regular space
+    .replace(/[\u00A0\u2000-\u200B\u202F\u205F\u3000]/g, ' ')
+    // Ellipsis → three dots
+    .replace(/\u2026/g, '...')
+    // Bullet point variants → asterisk
+    .replace(/[\u2022\u2023\u2043]/g, '*')
+    // Fraction characters → spelled out
+    .replace(/\u00BD/g, '1/2')
+    .replace(/\u00BC/g, '1/4')
+    .replace(/\u00BE/g, '3/4');
 }

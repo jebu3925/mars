@@ -10,20 +10,44 @@ import DiffMatchPatch from 'diff-match-patch';
 const execAsync = promisify(exec);
 
 /**
- * Normalize text to prevent spurious diffs from quote styles, dashes, etc.
+ * Normalize Unicode characters to ASCII equivalents.
+ *
+ * CRITICAL: This prevents Word Compare from showing spurious strike/reinsert
+ * when comparing documents with different quote/dash styles.
+ *
+ * Root cause: PDF extraction preserves smart quotes (U+201C/201D) but AI
+ * outputs straight quotes (ASCII 0x22). Word sees these as different chars.
  */
-function normalizeText(text: string): string {
+function normalizeToASCII(text: string): string {
   return text
-    // Normalize quotes
-    .replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"')  // Smart double quotes → straight
-    .replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'")  // Smart single quotes → straight
-    // Normalize dashes
-    .replace(/[\u2013\u2014\u2015]/g, '-')  // En/em dashes → hyphen
-    // Normalize spaces
-    .replace(/[\u00A0\u2000-\u200B]/g, ' ')  // Non-breaking/special spaces → regular
-    // Normalize ellipsis
-    .replace(/\u2026/g, '...');
+    // === QUOTES ===
+    // Smart double quotes → straight double quote
+    .replace(/[\u201C\u201D\u201E\u201F\u2033\u2036\u00AB\u00BB]/g, '"')
+    // Smart single quotes, apostrophes → straight single quote
+    .replace(/[\u2018\u2019\u201A\u201B\u2032\u2035\u2039\u203A]/g, "'")
+
+    // === DASHES ===
+    // En dash, em dash, horizontal bar, minus sign → hyphen
+    .replace(/[\u2013\u2014\u2015\u2212]/g, '-')
+
+    // === SPACES ===
+    // Non-breaking space, various Unicode spaces → regular space
+    .replace(/[\u00A0\u2000-\u200B\u202F\u205F\u3000]/g, ' ')
+
+    // === ELLIPSIS ===
+    .replace(/\u2026/g, '...')
+
+    // === OTHER COMMON SUBSTITUTIONS ===
+    // Bullet point variants → asterisk (for consistency)
+    .replace(/[\u2022\u2023\u2043]/g, '*')
+    // Fraction characters → spelled out
+    .replace(/\u00BD/g, '1/2')
+    .replace(/\u00BC/g, '1/4')
+    .replace(/\u00BE/g, '3/4');
 }
+
+// Alias for backwards compatibility with diff display
+const normalizeText = normalizeToASCII;
 
 /**
  * Generate a clean diff display showing ONLY the actual changes.
@@ -143,10 +167,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create temp file with the prompt and text
+    // CRITICAL: Normalize text BEFORE sending to AI
+    // This ensures AI works with ASCII quotes/dashes, preventing mismatch
+    // between original (smart quotes from PDF) and revised (AI output)
+    const normalizedInput = normalizeToASCII(text);
+
+    // DEBUG: Log normalization effect
+    const hasSmartQuotes = /[\u201C\u201D\u2018\u2019]/.test(text);
+    const hasSmartQuotesAfter = /[\u201C\u201D\u2018\u2019]/.test(normalizedInput);
+    console.log(`[NORMALIZATION] Input had smart quotes: ${hasSmartQuotes}, After normalization: ${hasSmartQuotesAfter}`);
+    console.log(`[NORMALIZATION] Sample before: ${text.substring(0, 200).replace(/\n/g, ' ')}`);
+    console.log(`[NORMALIZATION] Sample after:  ${normalizedInput.substring(0, 200).replace(/\n/g, ' ')}`);
+
+    // Create temp file with the prompt and normalized text
     const tempId = randomUUID();
     const tempInputFile = join(tmpdir(), `mars-review-${tempId}.txt`);
-    const fullPrompt = MARS_CONTRACT_PROMPT + text;
+    const fullPrompt = MARS_CONTRACT_PROMPT + normalizedInput;
 
     await writeFile(tempInputFile, fullPrompt, 'utf-8');
 
@@ -237,22 +273,20 @@ export async function POST(request: NextRequest) {
         .replace(/\*\*([^*]+)\*\*/g, '$1')  // Remove **bold** markers
         .replace(/~~([^~]+)~~/g, '$1');     // Remove ~~strikethrough~~ markers
 
-      // Normalize BOTH originalText and modifiedText to same character encoding
-      // This prevents spurious "strike and re-insert same word" in Word Compare
-      // When user compares ORIGINAL-PLAIN.docx vs REVISED.docx, both will match
-      const normalizedOriginal = normalizeText(text);
-      modifiedText = normalizeText(modifiedText);
+      // Apply normalization to modifiedText as well (AI might introduce variants)
+      modifiedText = normalizeToASCII(modifiedText);
 
       // Generate diff display using diff-match-patch
-      const redlinedText = generateDiffDisplay(normalizedOriginal, modifiedText);
+      // Both normalizedInput and modifiedText are now in same encoding
+      const redlinedText = generateDiffDisplay(normalizedInput, modifiedText);
 
-      console.log(`Generated diff display, original: ${normalizedOriginal.length} chars, modified: ${modifiedText.length} chars`);
+      console.log(`Generated diff display, original: ${normalizedInput.length} chars, modified: ${modifiedText.length} chars`);
       console.log(`Found ${sections.length} material sections to review`);
 
       return NextResponse.json({
         redlinedText,
-        originalText: normalizedOriginal,  // Use normalized version for Word document generation
-        modifiedText,
+        originalText: normalizedInput,  // Normalized for ORIGINAL-PLAIN.docx
+        modifiedText,                    // Normalized for REVISED.docx
         summary: result.summary,
         sections, // NEW: Structured section-by-section analysis
         contractId,

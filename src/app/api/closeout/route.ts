@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import * as XLSX from 'xlsx';
 import * as path from 'path';
 import * as fs from 'fs';
+import { getExcelFromStorage } from '@/lib/supabase';
 
 export const dynamic = 'force-dynamic';
 
@@ -58,35 +59,27 @@ export async function GET(request: Request) {
       return NextResponse.json(cachedData);
     }
 
-    // Try multiple paths for the data file
-    const possiblePaths = [
-      path.join(process.cwd(), 'data', 'closeout-data.xlsx'),
-      '/Users/jbb/Downloads/MARS-Contracts/data/closeout-data.xlsx',
-      path.join(__dirname, '..', '..', '..', '..', 'data', 'closeout-data.xlsx'),
-    ];
+    // Try to get file from Supabase Storage first, then fall back to local
+    let fileBuffer: Buffer | null = null;
 
-    let filePath = '';
-    for (const p of possiblePaths) {
-      if (fs.existsSync(p)) {
-        filePath = p;
-        break;
+    // Try Supabase Storage
+    fileBuffer = await getExcelFromStorage('closeout-data.xlsx');
+
+    // Fall back to local filesystem (for development)
+    if (!fileBuffer) {
+      const localPath = path.join(process.cwd(), 'data', 'closeout-data.xlsx');
+      if (fs.existsSync(localPath)) {
+        fileBuffer = fs.readFileSync(localPath);
       }
     }
 
-    if (!filePath) {
-      filePath = possiblePaths[0]; // Default for error message
-    }
-
-    if (!fs.existsSync(filePath)) {
+    if (!fileBuffer) {
       return NextResponse.json({
         error: 'Data file not found',
-        message: 'Please upload closeout-data.xlsx to the data folder',
-        triedPaths: possiblePaths,
+        message: 'Please upload closeout-data.xlsx to Supabase Storage (data-files bucket)',
       }, { status: 404 });
     }
 
-    // Read file as buffer to avoid XLSX file access issues in Next.js
-    const fileBuffer = fs.readFileSync(filePath);
     const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
 
     // Parse main cost audit sheet

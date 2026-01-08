@@ -3,8 +3,7 @@
  * Uses OAuth 2.0 Web Server Flow for authentication
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
+import { getOAuthToken, saveOAuthToken, OAuthToken } from './supabase';
 
 interface SalesforceAuthResponse {
   access_token: string;
@@ -49,14 +48,19 @@ interface StoredTokens {
 }
 
 /**
- * Load stored tokens from file
+ * Load stored tokens from Supabase
  */
-function loadStoredTokens(): StoredTokens | null {
+async function loadStoredTokens(): Promise<StoredTokens | null> {
   try {
-    const tokenPath = path.join(process.cwd(), '.salesforce-tokens.json');
-    if (fs.existsSync(tokenPath)) {
-      const data = fs.readFileSync(tokenPath, 'utf-8');
-      return JSON.parse(data);
+    const token = await getOAuthToken('salesforce');
+    if (token) {
+      return {
+        access_token: token.access_token,
+        refresh_token: token.refresh_token || '',
+        instance_url: (token as any).instance_url || '',
+        issued_at: new Date(token.expires_at).getTime() - 7200000, // Approximate issued_at
+        expires_in: 7200,
+      };
     }
   } catch (err) {
     console.error('Error loading stored tokens:', err);
@@ -65,12 +69,16 @@ function loadStoredTokens(): StoredTokens | null {
 }
 
 /**
- * Save tokens to file
+ * Save tokens to Supabase
  */
-function saveTokens(tokens: StoredTokens): void {
+async function saveTokens(tokens: StoredTokens): Promise<void> {
   try {
-    const tokenPath = path.join(process.cwd(), '.salesforce-tokens.json');
-    fs.writeFileSync(tokenPath, JSON.stringify(tokens, null, 2));
+    await saveOAuthToken({
+      provider: 'salesforce',
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      expires_at: new Date(tokens.issued_at + tokens.expires_in * 1000).toISOString(),
+    });
   } catch (err) {
     console.error('Error saving tokens:', err);
   }
@@ -105,12 +113,12 @@ async function refreshAccessToken(refreshToken: string, instanceUrl: string): Pr
 
   const data = await response.json();
 
-  // Update stored tokens
-  const storedTokens = loadStoredTokens();
+  // Update stored tokens in Supabase
+  const storedTokens = await loadStoredTokens();
   if (storedTokens) {
     storedTokens.access_token = data.access_token;
     storedTokens.issued_at = Date.now();
-    saveTokens(storedTokens);
+    await saveTokens(storedTokens);
   }
 
   return data.access_token;
@@ -125,8 +133,8 @@ export async function getSalesforceToken(): Promise<{ token: string; instanceUrl
     return { token: tokenCache.token, instanceUrl: tokenCache.instanceUrl };
   }
 
-  // Try to load stored tokens from OAuth flow
-  const storedTokens = loadStoredTokens();
+  // Try to load stored tokens from Supabase
+  const storedTokens = await loadStoredTokens();
 
   if (storedTokens) {
     // Check if token is still valid (with 5 min buffer)

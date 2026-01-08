@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Sidebar, { SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH } from '@/components/Sidebar';
 
-type TabType = 'timeline' | 'mcc' | 'punchlist' | 'docusign' | 'acceptance';
+type TabType = 'timeline' | 'mcc' | 'punchlist' | 'docusign';
 
 interface AsanaTask {
   gid: string;
@@ -50,35 +50,6 @@ interface DocuSignData {
   lastUpdated: string;
 }
 
-interface AcceptanceStatus {
-  projectName: string;
-  projectType: 'project' | 'mcc';
-  customerName: string;
-  completedDate: string;
-  asanaTaskId: string;
-  acceptanceSent: boolean;
-  acceptanceSentDate?: string;
-  acceptanceStatus?: string;
-  envelopeId?: string;
-  daysSinceCompletion: number;
-  isOverdue: boolean;
-}
-
-interface AcceptanceData {
-  statuses: AcceptanceStatus[];
-  stats: {
-    totalReadyForAcceptance: number;
-    acceptanceSent: number;
-    acceptanceMissing: number;
-    acceptanceCompleted: number;
-    percentSent: number;
-    percentCompleted: number;
-    avgDaysToSendAcceptance: number;
-  };
-  count: number;
-  hasDocuSign: boolean;
-  lastUpdated: string;
-}
 
 // Helper functions
 function formatDate(dateStr: string | null): string {
@@ -531,165 +502,11 @@ function PunchListTab({ data, loading }: { data: ProjectData | null; loading: bo
   );
 }
 
-// Acceptance Tracking Tab - PM Compliance
-function AcceptanceTrackingTab({ data, loading }: { data: AcceptanceData | null; loading: boolean }) {
-  const [filterMissing, setFilterMissing] = useState(false);
-  const [filterOverdue, setFilterOverdue] = useState(false);
-
-  const filteredStatuses = useMemo(() => {
-    if (!data) return [];
-    let statuses = data.statuses;
-    if (filterMissing) {
-      statuses = statuses.filter(s => !s.acceptanceSent);
-    }
-    if (filterOverdue) {
-      statuses = statuses.filter(s => s.isOverdue);
-    }
-    return statuses;
-  }, [data, filterMissing, filterOverdue]);
-
-  if (loading || !data) {
-    return <LoadingState />;
-  }
-
-  const getStatusColor = (status?: string, sent?: boolean) => {
-    if (!sent) return '#EF4444'; // Red - not sent
-    switch (status) {
-      case 'completed': case 'signed': return '#22C55E'; // Green
-      case 'sent': case 'delivered': return '#F59E0B'; // Yellow/Orange
-      case 'declined': return '#EF4444'; // Red
-      default: return '#64748B'; // Gray
-    }
-  };
-
-  const getStatusLabel = (status?: string, sent?: boolean) => {
-    if (!sent) return 'Not Sent';
-    switch (status) {
-      case 'completed': case 'signed': return 'Signed';
-      case 'sent': return 'Sent';
-      case 'delivered': return 'Opened';
-      case 'declined': return 'Declined';
-      default: return 'Unknown';
-    }
-  };
-
-  return (
-    <div>
-      {/* Compliance Stats */}
-      <div className="grid grid-cols-5 gap-4 mb-6">
-        <KPICard title="Ready for Acceptance" value={data.stats.totalReadyForAcceptance} subtitle="Completed projects" color="#38BDF8" />
-        <KPICard title="Acceptance Sent" value={data.stats.acceptanceSent} subtitle={`${data.stats.percentSent}% sent`} color="#22C55E" />
-        <KPICard title="Missing" value={data.stats.acceptanceMissing} subtitle="No acceptance sent" color="#EF4444" />
-        <KPICard title="Fully Signed" value={data.stats.acceptanceCompleted} subtitle={`${data.stats.percentCompleted}% complete`} color="#8B5CF6" />
-        <KPICard title="Avg Days to Send" value={data.stats.avgDaysToSendAcceptance} subtitle="After completion" color="#FFD700" />
-      </div>
-
-      {/* Filters */}
-      <div className="flex items-center gap-4 mb-6 flex-wrap">
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={filterMissing}
-            onChange={(e) => setFilterMissing(e.target.checked)}
-            className="w-3.5 h-3.5 rounded border-[#475569] bg-transparent text-[#EF4444] focus:ring-[#EF4444]/50"
-          />
-          <span className="text-[11px] text-[#64748B]">Show only missing</span>
-        </label>
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={filterOverdue}
-            onChange={(e) => setFilterOverdue(e.target.checked)}
-            className="w-3.5 h-3.5 rounded border-[#475569] bg-transparent text-[#EF4444] focus:ring-[#EF4444]/50"
-          />
-          <span className="text-[11px] text-[#64748B]">Show only overdue (7+ days)</span>
-        </label>
-        <span className="ml-auto text-[11px] text-[#64748B]">{filteredStatuses.length} projects</span>
-      </div>
-
-      {/* Project List */}
-      <div className="rounded-xl bg-[#111827] border border-white/[0.04] overflow-hidden">
-        <div className="grid gap-4 px-5 py-2.5 text-[10px] font-semibold text-[#475569] uppercase tracking-wider border-b border-white/[0.04] bg-[#0B1220]" style={{ gridTemplateColumns: '2fr 80px 100px 100px 80px 80px' }}>
-          <div>Project / Customer</div>
-          <div>Type</div>
-          <div>Completed</div>
-          <div>Acceptance</div>
-          <div>Days</div>
-          <div>Status</div>
-        </div>
-        <div className="max-h-[500px] overflow-y-auto">
-          {filteredStatuses.length === 0 ? (
-            <div className="px-5 py-8 text-center text-[#64748B]">
-              No projects match the current filters
-            </div>
-          ) : (
-            filteredStatuses.map((status, idx) => {
-              const color = getStatusColor(status.acceptanceStatus, status.acceptanceSent);
-              const label = getStatusLabel(status.acceptanceStatus, status.acceptanceSent);
-
-              return (
-                <div
-                  key={status.asanaTaskId}
-                  className={`grid gap-4 px-5 py-3 items-center border-b border-white/[0.03] ${idx % 2 === 0 ? 'bg-[#131B28]' : 'bg-[#111827]'} hover:bg-[#1a2740] transition-colors ${status.isOverdue ? 'border-l-2 border-l-[#EF4444]' : ''}`}
-                  style={{ gridTemplateColumns: '2fr 80px 100px 100px 80px 80px' }}
-                >
-                  <div>
-                    <div className="text-[13px] text-[#EAF2FF] truncate">{status.projectName}</div>
-                    {status.isOverdue && (
-                      <div className="text-[10px] text-[#EF4444] mt-0.5">Overdue - needs acceptance</div>
-                    )}
-                  </div>
-                  <div>
-                    <span className={`text-[10px] px-2 py-1 rounded font-medium ${status.projectType === 'mcc' ? 'bg-[#8B5CF6]/20 text-[#8B5CF6]' : 'bg-[#38BDF8]/20 text-[#38BDF8]'}`}>
-                      {status.projectType === 'mcc' ? 'MCC' : 'Project'}
-                    </span>
-                  </div>
-                  <div className="text-[11px] text-[#8FA3BF]">{formatDate(status.completedDate)}</div>
-                  <div className="text-[11px] text-[#8FA3BF]">{status.acceptanceSentDate ? formatDate(status.acceptanceSentDate) : '-'}</div>
-                  <div className={`text-[11px] font-medium ${status.daysSinceCompletion > 7 ? 'text-[#EF4444]' : 'text-[#8FA3BF]'}`}>
-                    {status.daysSinceCompletion}d
-                  </div>
-                  <div>
-                    <span className="text-[10px] px-2 py-1 rounded font-medium" style={{ backgroundColor: `${color}20`, color }}>
-                      {label}
-                    </span>
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
-      </div>
-
-      {/* Legend */}
-      <div className="mt-4 flex items-center gap-6 text-[10px] text-[#64748B]">
-        <div className="flex items-center gap-2">
-          <span className="w-3 h-0.5 bg-[#EF4444]"></span>
-          <span>Overdue (7+ days without acceptance)</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-[#22C55E]"></span>
-          <span>Signed</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-[#F59E0B]"></span>
-          <span>Sent/Awaiting</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-[#EF4444]"></span>
-          <span>Not Sent</span>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // DocuSign Tab - Project Acceptance
 function DocuSignTab({ data, loading }: { data: DocuSignData | null; loading: boolean }) {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [showVoided, setShowVoided] = useState<boolean>(false);
-  const [notifyingId, setNotifyingId] = useState<string | null>(null);
-  const [notifiedIds, setNotifiedIds] = useState<Set<string>>(new Set());
 
   const filteredEnvelopes = useMemo(() => {
     if (!data) return [];
@@ -702,6 +519,7 @@ function DocuSignTab({ data, loading }: { data: DocuSignData | null; loading: bo
 
     if (statusFilter === 'all') return envelopes;
     if (statusFilter === 'pending') return envelopes.filter(e => ['sent', 'delivered', 'created'].includes(e.status));
+    if (statusFilter === 'acceptance') return envelopes.filter(e => e.emailSubject?.toLowerCase().includes('acceptance'));
     return envelopes.filter(e => e.status === statusFilter);
   }, [data, statusFilter, showVoided]);
 
@@ -722,41 +540,6 @@ function DocuSignTab({ data, loading }: { data: DocuSignData | null; loading: bo
     window.open(`/api/docusign?action=download&envelopeId=${envelopeId}`, '_blank');
   };
 
-  const handleNotifyTeam = async (envelope: DocuSignEnvelope) => {
-    setNotifyingId(envelope.envelopeId);
-    try {
-      // Extract customer name from subject
-      const projectMatch = envelope.emailSubject.match(/Please DocuSign:\s*(.+?)\s*MARS Project Final Acceptance/i);
-      const mccMatch = envelope.emailSubject.match(/Complete with Docusign:\s*(.+?)\s*MCC Work Order Acceptance/i);
-
-      const customerName = projectMatch?.[1] || mccMatch?.[1] || envelope.emailSubject;
-      const type = mccMatch ? 'mcc' : 'project';
-
-      const res = await fetch('/api/notifications/slack', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customerName,
-          type,
-          signedDate: envelope.completedDateTime || new Date().toISOString(),
-          envelopeId: envelope.envelopeId,
-        }),
-      });
-
-      if (res.ok) {
-        setNotifiedIds(prev => new Set(prev).add(envelope.envelopeId));
-      } else {
-        const error = await res.json();
-        console.error('Slack notification failed:', error);
-        alert('Failed to send Slack notification. Check console for details.');
-      }
-    } catch (error) {
-      console.error('Error sending notification:', error);
-      alert('Failed to send notification');
-    } finally {
-      setNotifyingId(null);
-    }
-  };
 
   if (loading || !data) {
     return <LoadingState />;
@@ -820,7 +603,7 @@ function DocuSignTab({ data, loading }: { data: DocuSignData | null; loading: bo
       {/* Filters */}
       <div className="flex items-center gap-2 mb-6 flex-wrap">
         <span className="text-[11px] font-semibold text-[#475569] uppercase">Status:</span>
-        {['all', 'pending', 'completed', 'declined'].map(s => (
+        {['all', 'pending', 'completed', 'declined', 'acceptance'].map(s => (
           <button key={s} onClick={() => setStatusFilter(s)} className={`text-[11px] px-3 py-1.5 rounded-lg capitalize ${statusFilter === s ? 'bg-[#FFD700]/20 text-[#FFD700] border border-[#FFD700]/30' : 'bg-white/5 text-[#64748B] hover:text-white'}`}>
             {s === 'all' ? 'All' : s}
           </button>
@@ -852,9 +635,6 @@ function DocuSignTab({ data, loading }: { data: DocuSignData | null; loading: bo
             const color = getStatusColor(envelope.status);
             const label = getStatusLabel(envelope.status);
 
-            const isNotified = notifiedIds.has(envelope.envelopeId);
-            const isNotifying = notifyingId === envelope.envelopeId;
-
             return (
               <div key={envelope.envelopeId} className={`grid gap-4 px-5 py-3 items-center border-b border-white/[0.03] ${idx % 2 === 0 ? 'bg-[#131B28]' : 'bg-[#111827]'} hover:bg-[#1a2740] transition-colors`} style={{ gridTemplateColumns: '2fr 90px 100px 100px 80px 150px' }}>
                 <div className="text-[13px] text-[#EAF2FF] truncate">{envelope.emailSubject}</div>
@@ -873,7 +653,6 @@ function DocuSignTab({ data, loading }: { data: DocuSignData | null; loading: bo
                     View
                   </button>
                   {['completed', 'signed'].includes(envelope.status) && (
-                    <>
                       <button
                         onClick={() => handleDownload(envelope.envelopeId)}
                         className="text-[10px] px-2 py-1 rounded bg-[#22C55E]/10 text-[#22C55E] hover:bg-[#22C55E]/20 transition-colors"
@@ -881,21 +660,6 @@ function DocuSignTab({ data, loading }: { data: DocuSignData | null; loading: bo
                       >
                         PDF
                       </button>
-                      <button
-                        onClick={() => handleNotifyTeam(envelope)}
-                        disabled={isNotifying || isNotified}
-                        className={`text-[10px] px-2 py-1 rounded transition-colors ${
-                          isNotified
-                            ? 'bg-[#8B5CF6]/10 text-[#8B5CF6] cursor-default'
-                            : isNotifying
-                            ? 'bg-[#FFD700]/10 text-[#FFD700] opacity-50'
-                            : 'bg-[#FFD700]/10 text-[#FFD700] hover:bg-[#FFD700]/20'
-                        }`}
-                        title={isNotified ? 'Team notified' : 'Notify team on Slack'}
-                      >
-                        {isNotifying ? '...' : isNotified ? 'Notified' : 'Notify'}
-                      </button>
-                    </>
                   )}
                 </div>
               </div>
@@ -925,8 +689,7 @@ export default function PMDashboard() {
   const [mccData, setMccData] = useState<ProjectData | null>(null);
   const [punchlistData, setPunchlistData] = useState<ProjectData | null>(null);
   const [docusignData, setDocusignData] = useState<DocuSignData | null>(null);
-  const [acceptanceData, setAcceptanceData] = useState<AcceptanceData | null>(null);
-  const [loading, setLoading] = useState({ timeline: true, mcc: true, punchlist: true, docusign: true, acceptance: true });
+  const [loading, setLoading] = useState({ timeline: true, mcc: true, punchlist: true, docusign: true });
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
@@ -967,25 +730,11 @@ export default function PMDashboard() {
     }
   }
 
-  async function fetchAcceptance() {
-    try {
-      setLoading(prev => ({ ...prev, acceptance: true }));
-      const response = await fetch('/api/project-acceptance');
-      const result = await response.json();
-      if (!result.error) {
-        setAcceptanceData(result);
-      }
-    } finally {
-      setLoading(prev => ({ ...prev, acceptance: false }));
-    }
-  }
-
   useEffect(() => {
     fetchAsanaProject(PROJECT_IDS.timeline, 'timeline');
     fetchAsanaProject(PROJECT_IDS.mcc, 'mcc');
     fetchAsanaProject(PROJECT_IDS.punchlist, 'punchlist');
     fetchDocuSign();
-    fetchAcceptance();
   }, []);
 
   const handleRefresh = () => {
@@ -993,7 +742,6 @@ export default function PMDashboard() {
     fetchAsanaProject(PROJECT_IDS.mcc, 'mcc');
     fetchAsanaProject(PROJECT_IDS.punchlist, 'punchlist');
     fetchDocuSign();
-    fetchAcceptance();
   };
 
   const isLoading = Object.values(loading).some(l => l);
@@ -1037,7 +785,6 @@ export default function PMDashboard() {
               <TabButton tab="mcc" activeTab={activeTab} onClick={setActiveTab} label="MCC Status" count={mccData?.stats.incomplete} icon={<svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>} />
               <TabButton tab="punchlist" activeTab={activeTab} onClick={setActiveTab} label="Punch List" count={punchlistData?.stats.incomplete} icon={<svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" /></svg>} />
               <TabButton tab="docusign" activeTab={activeTab} onClick={setActiveTab} label="DocuSign" count={docusignData?.stats.pending} icon={<svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>} />
-              <TabButton tab="acceptance" activeTab={activeTab} onClick={setActiveTab} label="Acceptance Tracking" count={acceptanceData?.stats.acceptanceMissing} icon={<svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>} />
             </div>
           </div>
         </header>
@@ -1049,7 +796,6 @@ export default function PMDashboard() {
               {activeTab === 'mcc' && <MCCStatusTab data={mccData} loading={loading.mcc} />}
               {activeTab === 'punchlist' && <PunchListTab data={punchlistData} loading={loading.punchlist} />}
               {activeTab === 'docusign' && <DocuSignTab data={docusignData} loading={loading.docusign} />}
-              {activeTab === 'acceptance' && <AcceptanceTrackingTab data={acceptanceData} loading={loading.acceptance} />}
             </motion.div>
           </AnimatePresence>
         </main>

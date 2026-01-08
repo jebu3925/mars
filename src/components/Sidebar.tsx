@@ -1,9 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useEffect, createContext, useContext } from 'react';
+import { supabase } from '@/lib/supabase';
+import type { User } from '@supabase/supabase-js';
 
 // Context for sidebar state - allows dashboards to respond to collapse
 export const SidebarContext = createContext<{
@@ -15,6 +17,16 @@ export const SidebarContext = createContext<{
 });
 
 export const useSidebar = () => useContext(SidebarContext);
+
+// Dashboard access by role
+const DASHBOARD_ACCESS: Record<string, string[]> = {
+  admin: ['/contracts-dashboard', '/mcc-dashboard', '/closeout-dashboard', '/pm-dashboard', '/contracts/review'],
+  sales: ['/contracts-dashboard'],
+  finance: ['/mcc-dashboard', '/closeout-dashboard'],
+  pm: ['/closeout-dashboard', '/pm-dashboard'],
+  legal: ['/contracts/review'],
+  viewer: [],
+};
 
 interface NavItem {
   name: string;
@@ -135,10 +147,45 @@ interface SidebarProps {
 
 export default function Sidebar({ isCollapsed: controlledCollapsed, onCollapsedChange }: SidebarProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const [internalCollapsed, setInternalCollapsed] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [userRole, setUserRole] = useState<string>('viewer');
+  const [loggingOut, setLoggingOut] = useState(false);
 
   // Use controlled or internal state
   const isCollapsed = controlledCollapsed ?? internalCollapsed;
+
+  // Load user and role on mount
+  useEffect(() => {
+    const getUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      setUser(user);
+
+      if (user) {
+        // Get user role from user_roles table
+        const { data: roleData } = await supabase
+          .from('user_roles')
+          .select('role')
+          .eq('user_id', user.id)
+          .single();
+
+        setUserRole(roleData?.role || 'viewer');
+      }
+    };
+
+    getUser();
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      if (!session?.user) {
+        setUserRole('viewer');
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
 
   // Load collapsed state from localStorage on mount
   useEffect(() => {
@@ -149,6 +196,21 @@ export default function Sidebar({ isCollapsed: controlledCollapsed, onCollapsedC
       onCollapsedChange?.(value);
     }
   }, []);
+
+  // Filter nav items based on user role
+  const allowedPaths = DASHBOARD_ACCESS[userRole] || [];
+  const filteredNavCategories = navCategories.map(category => ({
+    ...category,
+    items: category.items.filter(item =>
+      item.disabled || allowedPaths.some(path => item.href.startsWith(path) || item.href === path)
+    ),
+  })).filter(category => category.items.length > 0);
+
+  const handleLogout = async () => {
+    setLoggingOut(true);
+    await supabase.auth.signOut();
+    router.push('/login');
+  };
 
   const toggleCollapsed = () => {
     const newValue = !isCollapsed;
@@ -217,7 +279,7 @@ export default function Sidebar({ isCollapsed: controlledCollapsed, onCollapsedC
 
       {/* Navigation by Category */}
       <nav className={`px-3 space-y-4 overflow-y-auto max-h-[calc(100vh-280px)] ${isCollapsed ? 'px-2' : ''}`}>
-        {navCategories.map((category) => (
+        {filteredNavCategories.map((category) => (
           <div key={category.name}>
             <AnimatePresence>
               {!isCollapsed && (
@@ -333,8 +395,45 @@ export default function Sidebar({ isCollapsed: controlledCollapsed, onCollapsedC
 
       {/* Collapsed Data Sources indicator */}
       {isCollapsed && (
-        <div className="absolute bottom-4 left-0 right-0 flex flex-col items-center gap-2">
+        <div className="absolute bottom-16 left-0 right-0 flex flex-col items-center gap-2">
           <div className="w-1.5 h-1.5 rounded-full bg-[#22C55E] animate-pulse" title="Data sources connected" />
+        </div>
+      )}
+
+      {/* User info and Logout */}
+      {user && (
+        <div className={`absolute bottom-0 left-0 right-0 p-3 border-t border-[#1E293B] bg-[#0B1220] ${isCollapsed ? 'px-2' : ''}`}>
+          {!isCollapsed && (
+            <div className="flex items-center gap-2 mb-2 px-2">
+              <div className="w-6 h-6 rounded-full bg-[#1E293B] flex items-center justify-center">
+                <span className="text-[10px] text-[#8FA3BF] font-medium">
+                  {user.email?.charAt(0).toUpperCase()}
+                </span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[11px] text-[#8FA3BF] truncate">{user.email}</p>
+                <p className="text-[9px] text-[#475569] capitalize">{userRole}</p>
+              </div>
+            </div>
+          )}
+          <button
+            onClick={handleLogout}
+            disabled={loggingOut}
+            className={`
+              flex items-center gap-2 w-full px-2 py-2 rounded-lg
+              text-[#8FA3BF] hover:bg-[#1E293B] hover:text-white transition-all
+              ${isCollapsed ? 'justify-center' : ''}
+              disabled:opacity-50
+            `}
+            title="Sign out"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+            </svg>
+            {!isCollapsed && (
+              <span className="text-[12px]">{loggingOut ? 'Signing out...' : 'Sign out'}</span>
+            )}
+          </button>
         </div>
       )}
     </motion.div>
