@@ -1,11 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import * as fs from 'fs';
-import * as path from 'path';
+import { saveOAuthToken } from '@/lib/supabase';
 
 const SALESFORCE_CLIENT_ID = process.env.SALESFORCE_CLIENT_ID!;
 const SALESFORCE_CLIENT_SECRET = process.env.SALESFORCE_CLIENT_SECRET!;
-const REDIRECT_URI = 'http://localhost:3000/api/salesforce/callback';
+
+/**
+ * Get the base URL for redirects
+ */
+function getBaseUrl(request: NextRequest): string {
+  // Use NEXT_PUBLIC_VERCEL_URL or VERCEL_URL if available
+  const vercelUrl = process.env.NEXT_PUBLIC_VERCEL_URL || process.env.VERCEL_URL;
+  if (vercelUrl) {
+    return `https://${vercelUrl}`;
+  }
+
+  // Fall back to request host
+  const host = request.headers.get('host') || 'localhost:3000';
+  const protocol = host.includes('localhost') ? 'http' : 'https';
+  return `${protocol}://${host}`;
+}
 
 /**
  * OAuth callback - exchanges authorization code for tokens
@@ -16,15 +30,18 @@ export async function GET(request: NextRequest) {
   const error = searchParams.get('error');
   const errorDescription = searchParams.get('error_description');
 
+  const baseUrl = getBaseUrl(request);
+  const redirectUri = `${baseUrl}/api/salesforce/callback`;
+
   if (error) {
     return NextResponse.redirect(
-      `http://localhost:3000/contracts-dashboard?error=${encodeURIComponent(errorDescription || error)}`
+      `${baseUrl}/contracts-dashboard?error=${encodeURIComponent(errorDescription || error)}`
     );
   }
 
   if (!code) {
     return NextResponse.redirect(
-      'http://localhost:3000/contracts-dashboard?error=No authorization code received'
+      `${baseUrl}/contracts-dashboard?error=No authorization code received`
     );
   }
 
@@ -38,7 +55,7 @@ export async function GET(request: NextRequest) {
     if (!codeVerifier) {
       console.error('Missing code verifier cookie');
       return NextResponse.redirect(
-        'http://localhost:3000/contracts-dashboard?error=Missing code verifier - please try again'
+        `${baseUrl}/contracts-dashboard?error=Missing code verifier - please try again`
       );
     }
 
@@ -52,7 +69,7 @@ export async function GET(request: NextRequest) {
         grant_type: 'authorization_code',
         client_id: SALESFORCE_CLIENT_ID,
         client_secret: SALESFORCE_CLIENT_SECRET,
-        redirect_uri: REDIRECT_URI,
+        redirect_uri: redirectUri,
         code,
         code_verifier: codeVerifier,
       }).toString(),
@@ -62,36 +79,39 @@ export async function GET(request: NextRequest) {
       const errorText = await tokenResponse.text();
       console.error('Token exchange failed:', errorText);
       return NextResponse.redirect(
-        `http://localhost:3000/contracts-dashboard?error=${encodeURIComponent('Token exchange failed')}`
+        `${baseUrl}/contracts-dashboard?error=${encodeURIComponent('Token exchange failed')}`
       );
     }
 
     const tokens = await tokenResponse.json();
 
-    // Store tokens in a local file (for development)
-    const tokenData = {
+    // Save tokens to Supabase
+    const saved = await saveOAuthToken({
+      provider: 'salesforce',
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,
       instance_url: tokens.instance_url,
-      issued_at: Date.now(),
-      expires_in: 7200, // 2 hours typically
-    };
+      expires_at: new Date(Date.now() + 7200000).toISOString(), // 2 hours
+    });
 
-    // Save to .salesforce-tokens.json
-    const tokenPath = path.join(process.cwd(), '.salesforce-tokens.json');
-    fs.writeFileSync(tokenPath, JSON.stringify(tokenData, null, 2));
+    if (!saved) {
+      console.error('Failed to save tokens to Supabase');
+      return NextResponse.redirect(
+        `${baseUrl}/contracts-dashboard?error=${encodeURIComponent('Failed to save tokens')}`
+      );
+    }
 
-    console.log('Salesforce tokens saved successfully!');
+    console.log('Salesforce tokens saved successfully to Supabase!');
     console.log('Instance URL:', tokens.instance_url);
 
     // Redirect back to dashboard with success
     return NextResponse.redirect(
-      'http://localhost:3000/contracts-dashboard?salesforce=connected'
+      `${baseUrl}/contracts-dashboard?salesforce=connected`
     );
   } catch (err) {
     console.error('OAuth callback error:', err);
     return NextResponse.redirect(
-      `http://localhost:3000/contracts-dashboard?error=${encodeURIComponent('Authentication failed')}`
+      `${baseUrl}/contracts-dashboard?error=${encodeURIComponent('Authentication failed')}`
     );
   }
 }

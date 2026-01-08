@@ -64,7 +64,8 @@ export const DASHBOARD_ACCESS: Record<string, string[]> = {
  * Get OAuth token from database
  */
 export async function getOAuthToken(provider: 'docusign' | 'salesforce'): Promise<OAuthToken | null> {
-  const { data, error } = await supabaseAdmin
+  const admin = getSupabaseAdmin();
+  const { data, error } = await admin
     .from('oauth_tokens')
     .select('*')
     .eq('provider', provider)
@@ -82,7 +83,8 @@ export async function getOAuthToken(provider: 'docusign' | 'salesforce'): Promis
  * Save OAuth token to database
  */
 export async function saveOAuthToken(token: OAuthToken): Promise<boolean> {
-  const { error } = await supabaseAdmin
+  const admin = getSupabaseAdmin();
+  const { error } = await admin
     .from('oauth_tokens')
     .upsert(
       {
@@ -108,7 +110,8 @@ export async function saveOAuthToken(token: OAuthToken): Promise<boolean> {
  * Get user role from database
  */
 export async function getUserRole(userId: string): Promise<string | null> {
-  const { data, error } = await supabaseAdmin
+  const admin = getSupabaseAdmin();
+  const { data, error } = await admin
     .from('user_roles')
     .select('role')
     .eq('user_id', userId)
@@ -133,7 +136,8 @@ export function canAccessDashboard(role: string, dashboardPath: string): boolean
  * Get Excel file from Supabase Storage
  */
 export async function getExcelFromStorage(filename: string): Promise<Buffer | null> {
-  const { data, error } = await supabaseAdmin
+  const admin = getSupabaseAdmin();
+  const { data, error } = await admin
     .storage
     .from('data-files')
     .download(filename);
