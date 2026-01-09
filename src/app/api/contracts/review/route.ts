@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import { writeFile, unlink } from 'fs/promises';
-import { tmpdir } from 'os';
-import { join } from 'path';
-import { randomUUID } from 'crypto';
 import DiffMatchPatch from 'diff-match-patch';
 
-const execAsync = promisify(exec);
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+
+// OpenRouter model mapping
+const MODEL_MAP: Record<string, string> = {
+  haiku: 'anthropic/claude-3-haiku',
+  sonnet: 'anthropic/claude-sonnet-4',
+  opus: 'anthropic/claude-opus-4',
+};
 
 /**
  * Normalize Unicode characters to ASCII equivalents.
@@ -167,6 +168,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (!OPENROUTER_API_KEY) {
+      return NextResponse.json(
+        { error: 'OpenRouter API key not configured' },
+        { status: 500 }
+      );
+    }
+
     // CRITICAL: Normalize text BEFORE sending to AI
     // This ensures AI works with ASCII quotes/dashes, preventing mismatch
     // between original (smart quotes from PDF) and revised (AI output)
@@ -176,148 +184,133 @@ export async function POST(request: NextRequest) {
     const hasSmartQuotes = /[\u201C\u201D\u2018\u2019]/.test(text);
     const hasSmartQuotesAfter = /[\u201C\u201D\u2018\u2019]/.test(normalizedInput);
     console.log(`[NORMALIZATION] Input had smart quotes: ${hasSmartQuotes}, After normalization: ${hasSmartQuotesAfter}`);
-    console.log(`[NORMALIZATION] Sample before: ${text.substring(0, 200).replace(/\n/g, ' ')}`);
-    console.log(`[NORMALIZATION] Sample after:  ${normalizedInput.substring(0, 200).replace(/\n/g, ' ')}`);
 
-    // Create temp file with the prompt and normalized text
-    const tempId = randomUUID();
-    const tempInputFile = join(tmpdir(), `mars-review-${tempId}.txt`);
     const fullPrompt = MARS_CONTRACT_PROMPT + normalizedInput;
 
-    await writeFile(tempInputFile, fullPrompt, 'utf-8');
+    // Call OpenRouter API
+    const openRouterModel = MODEL_MAP[model] || MODEL_MAP.sonnet;
+    console.log(`Starting OpenRouter analysis with model: ${openRouterModel}...`);
+    const startTime = Date.now();
 
-    try {
-      // Call Claude Code CLI
-      console.log(`Starting Claude CLI analysis with model: ${model}...`);
-      const startTime = Date.now();
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://mars-contracts.vercel.app',
+        'X-Title': 'MARS Contract Review',
+      },
+      body: JSON.stringify({
+        model: openRouterModel,
+        messages: [
+          {
+            role: 'user',
+            content: fullPrompt,
+          },
+        ],
+        max_tokens: 16000,
+        temperature: 0.2,
+      }),
+    });
 
-      // Set timeout based on model (generous timeouts to avoid kills)
-      const timeouts: Record<string, number> = {
-        haiku: 120000,   // 2 minutes
-        sonnet: 300000,  // 5 minutes
-        opus: 600000,    // 10 minutes
-      };
-      const timeout = timeouts[model] || 300000;
-
-      const { stdout, stderr } = await execAsync(
-        `cat "${tempInputFile}" | claude --print --model ${model}`,
-        {
-          timeout,
-          maxBuffer: 1024 * 1024 * 10, // 10MB buffer
-        }
-      );
-
-      console.log(`Claude CLI completed in ${(Date.now() - startTime) / 1000}s`);
-      console.log('Raw output length:', stdout.length);
-      if (stderr) console.log('Claude stderr:', stderr);
-
-      // Parse the response
-      let result;
-      try {
-        // Try to extract JSON from the response - find the outermost { }
-        let jsonStr = stdout.trim();
-
-        // Strip markdown code blocks if present
-        jsonStr = jsonStr.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '');
-
-        // Find JSON object boundaries - look for the structure we expect
-        const firstBrace = jsonStr.indexOf('{');
-        const lastBrace = jsonStr.lastIndexOf('}');
-
-        if (firstBrace !== -1 && lastBrace > firstBrace) {
-          jsonStr = jsonStr.substring(firstBrace, lastBrace + 1);
-
-          // Try to parse
-          try {
-            result = JSON.parse(jsonStr);
-          } catch {
-            // If direct parse fails, try to fix common issues
-            // Sometimes there are unescaped newlines in strings
-            jsonStr = jsonStr.replace(/[\r\n]+/g, '\\n');
-            result = JSON.parse(jsonStr);
-          }
-
-          console.log('Successfully parsed JSON response');
-          console.log('Fields in result:', Object.keys(result));
-          console.log('modifiedText length:', result.modifiedText?.length || 0);
-          console.log('summary count:', result.summary?.length || 0);
-        } else {
-          // No JSON found - maybe the AI returned text. Try to extract any useful info
-          console.log('No JSON braces found. Raw output:', stdout.substring(0, 1000));
-          throw new Error('No JSON object found in response');
-        }
-      } catch (parseError) {
-        console.error('JSON parse error:', parseError);
-        console.log('Raw output preview:', stdout.substring(0, 500));
-
-        // If JSON parsing fails, return error with more context
-        return NextResponse.json(
-          { error: 'AI did not return valid JSON. Try selecting "Quick" mode or try again.' },
-          { status: 500 }
-        );
-      }
-
-      // Ensure summary is an array
-      if (!Array.isArray(result.summary)) {
-        result.summary = [result.summary || 'No summary provided'];
-      }
-
-      // Ensure sections is an array
-      const sections = Array.isArray(result.sections) ? result.sections : [];
-
-      // Ensure modifiedText exists and clean it up
-      let modifiedText = result.modifiedText || text;
-
-      // Strip any markdown formatting (AI sometimes includes despite instructions)
-      modifiedText = modifiedText
-        .replace(/\*\*([^*]+)\*\*/g, '$1')  // Remove **bold** markers
-        .replace(/~~([^~]+)~~/g, '$1');     // Remove ~~strikethrough~~ markers
-
-      // Apply normalization to modifiedText as well (AI might introduce variants)
-      modifiedText = normalizeToASCII(modifiedText);
-
-      // Generate diff display using diff-match-patch
-      // Both normalizedInput and modifiedText are now in same encoding
-      const redlinedText = generateDiffDisplay(normalizedInput, modifiedText);
-
-      console.log(`Generated diff display, original: ${normalizedInput.length} chars, modified: ${modifiedText.length} chars`);
-      console.log(`Found ${sections.length} material sections to review`);
-
-      return NextResponse.json({
-        redlinedText,
-        originalText: normalizedInput,  // Normalized for ORIGINAL-PLAIN.docx
-        modifiedText,                    // Normalized for REVISED.docx
-        summary: result.summary,
-        sections, // NEW: Structured section-by-section analysis
-        contractId,
-        provisionName,
-      });
-    } finally {
-      // Clean up temp file
-      try {
-        await unlink(tempInputFile);
-      } catch {
-        // Ignore cleanup errors
-      }
-    }
-  } catch (error) {
-    console.error('Contract review error:', error);
-
-    // Check if it's a timeout or killed process
-    if (error instanceof Error && (error.message.includes('ETIMEDOUT') || error.message.includes('SIGTERM') || error.message.includes('killed'))) {
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('OpenRouter error:', errorText);
       return NextResponse.json(
-        { error: 'Analysis timed out after 5 minutes. Please try a shorter document or section.' },
-        { status: 504 }
-      );
-    }
-
-    // Check if Claude CLI is not installed
-    if (error instanceof Error && error.message.includes('command not found')) {
-      return NextResponse.json(
-        { error: 'Claude Code CLI not found. Please ensure it is installed and in PATH.' },
+        { error: `AI analysis failed: ${response.status}` },
         { status: 500 }
       );
     }
+
+    const aiResponse = await response.json();
+    const stdout = aiResponse.choices?.[0]?.message?.content || '';
+
+    console.log(`OpenRouter completed in ${(Date.now() - startTime) / 1000}s`);
+    console.log('Raw output length:', stdout.length);
+
+    // Parse the response
+    let result;
+    try {
+      // Try to extract JSON from the response - find the outermost { }
+      let jsonStr = stdout.trim();
+
+      // Strip markdown code blocks if present
+      jsonStr = jsonStr.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '');
+
+      // Find JSON object boundaries - look for the structure we expect
+      const firstBrace = jsonStr.indexOf('{');
+      const lastBrace = jsonStr.lastIndexOf('}');
+
+      if (firstBrace !== -1 && lastBrace > firstBrace) {
+        jsonStr = jsonStr.substring(firstBrace, lastBrace + 1);
+
+        // Try to parse
+        try {
+          result = JSON.parse(jsonStr);
+        } catch {
+          // If direct parse fails, try to fix common issues
+          // Sometimes there are unescaped newlines in strings
+          jsonStr = jsonStr.replace(/[\r\n]+/g, '\\n');
+          result = JSON.parse(jsonStr);
+        }
+
+        console.log('Successfully parsed JSON response');
+        console.log('Fields in result:', Object.keys(result));
+        console.log('modifiedText length:', result.modifiedText?.length || 0);
+        console.log('summary count:', result.summary?.length || 0);
+      } else {
+        // No JSON found - maybe the AI returned text. Try to extract any useful info
+        console.log('No JSON braces found. Raw output:', stdout.substring(0, 1000));
+        throw new Error('No JSON object found in response');
+      }
+    } catch (parseError) {
+      console.error('JSON parse error:', parseError);
+      console.log('Raw output preview:', stdout.substring(0, 500));
+
+      // If JSON parsing fails, return error with more context
+      return NextResponse.json(
+        { error: 'AI did not return valid JSON. Try selecting "Quick" mode or try again.' },
+        { status: 500 }
+      );
+    }
+
+    // Ensure summary is an array
+    if (!Array.isArray(result.summary)) {
+      result.summary = [result.summary || 'No summary provided'];
+    }
+
+    // Ensure sections is an array
+    const sections = Array.isArray(result.sections) ? result.sections : [];
+
+    // Ensure modifiedText exists and clean it up
+    let modifiedText = result.modifiedText || text;
+
+    // Strip any markdown formatting (AI sometimes includes despite instructions)
+    modifiedText = modifiedText
+      .replace(/\*\*([^*]+)\*\*/g, '$1')  // Remove **bold** markers
+      .replace(/~~([^~]+)~~/g, '$1');     // Remove ~~strikethrough~~ markers
+
+    // Apply normalization to modifiedText as well (AI might introduce variants)
+    modifiedText = normalizeToASCII(modifiedText);
+
+    // Generate diff display using diff-match-patch
+    // Both normalizedInput and modifiedText are now in same encoding
+    const redlinedText = generateDiffDisplay(normalizedInput, modifiedText);
+
+    console.log(`Generated diff display, original: ${normalizedInput.length} chars, modified: ${modifiedText.length} chars`);
+    console.log(`Found ${sections.length} material sections to review`);
+
+    return NextResponse.json({
+      redlinedText,
+      originalText: normalizedInput,  // Normalized for ORIGINAL-PLAIN.docx
+      modifiedText,                    // Normalized for REVISED.docx
+      summary: result.summary,
+      sections, // NEW: Structured section-by-section analysis
+      contractId,
+      provisionName,
+    });
+  } catch (error) {
+    console.error('Contract review error:', error);
 
     // Log more details about the error
     const errorDetails = error instanceof Error ? error.message : String(error);
