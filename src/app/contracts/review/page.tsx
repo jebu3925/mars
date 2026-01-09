@@ -29,6 +29,40 @@ interface ReviewHistory {
   status: 'draft' | 'sent_to_boss' | 'sent_to_client' | 'approved';
 }
 
+// Types for document comparison
+interface CompareChange {
+  id: number;
+  type: 'equal' | 'delete' | 'insert';
+  text: string;
+}
+
+interface CompareStats {
+  totalChanges: number;
+  deletions: number;
+  insertions: number;
+  originalLength: number;
+  revisedLength: number;
+  characterChanges: number;
+}
+
+interface CompareSection {
+  section: string;
+  changes: CompareChange[];
+}
+
+interface CompareResult {
+  changes: CompareChange[];
+  stats: CompareStats;
+  sections: CompareSection[];
+  normalizedOriginal: string;
+  normalizedRevised: string;
+}
+
+interface CategorizedChange extends CompareChange {
+  category?: 'substantive' | 'formatting' | 'minor';
+  explanation?: string;
+}
+
 // Models for contract review via OpenRouter - legal-grade only
 const MODELS = [
   { id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4', desc: 'Best quality (Recommended)' },
@@ -49,7 +83,7 @@ export default function ContractReviewPage() {
   const [error, setError] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState<ReviewHistory[]>([]);
-  const [activeTab, setActiveTab] = useState<'paste' | 'upload'>('paste');
+  const [activeTab, setActiveTab] = useState<'paste' | 'upload' | 'compare'>('paste');
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [extractedText, setExtractedText] = useState<string | null>(null);
   const [isExtracting, setIsExtracting] = useState(false);
@@ -59,6 +93,21 @@ export default function ContractReviewPage() {
   const [selectedModel, setSelectedModel] = useState<string>('anthropic/claude-sonnet-4');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const contractDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Compare Documents state
+  const [compareOriginalFile, setCompareOriginalFile] = useState<File | null>(null);
+  const [compareRevisedFile, setCompareRevisedFile] = useState<File | null>(null);
+  const [compareOriginalText, setCompareOriginalText] = useState<string | null>(null);
+  const [compareRevisedText, setCompareRevisedText] = useState<string | null>(null);
+  const [isExtractingOriginal, setIsExtractingOriginal] = useState(false);
+  const [isExtractingRevised, setIsExtractingRevised] = useState(false);
+  const [isComparing, setIsComparing] = useState(false);
+  const [compareResult, setCompareResult] = useState<CompareResult | null>(null);
+  const [compareError, setCompareError] = useState<string | null>(null);
+  const [showSectionGrouping, setShowSectionGrouping] = useState(true);
+  const [isCategorizing, setIsCategorizing] = useState(false);
+  const [categorizedChanges, setCategorizedChanges] = useState<CategorizedChange[] | null>(null);
+  const [categoryFilter, setCategoryFilter] = useState<'all' | 'substantive' | 'formatting' | 'minor'>('all');
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -307,6 +356,154 @@ export default function ContractReviewPage() {
     await handleDownloadRevised();
   }
 
+  // ===== COMPARE DOCUMENTS FUNCTIONS =====
+
+  async function handleCompareFileUpload(file: File, side: 'original' | 'revised') {
+    const setFile = side === 'original' ? setCompareOriginalFile : setCompareRevisedFile;
+    const setText = side === 'original' ? setCompareOriginalText : setCompareRevisedText;
+    const setExtracting = side === 'original' ? setIsExtractingOriginal : setIsExtractingRevised;
+
+    setFile(file);
+    setExtracting(true);
+    setCompareError(null);
+    setCompareResult(null);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await fetch('/api/contracts/review/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to extract text');
+      }
+
+      const data = await response.json();
+      setText(data.text);
+    } catch (err) {
+      setCompareError(err instanceof Error ? err.message : 'Failed to extract text from file');
+      setFile(null);
+    } finally {
+      setExtracting(false);
+    }
+  }
+
+  async function handleCompareDocuments() {
+    if (!compareOriginalText || !compareRevisedText) {
+      setCompareError('Please upload both documents');
+      return;
+    }
+
+    setIsComparing(true);
+    setCompareError(null);
+    setCompareResult(null);
+
+    try {
+      const response = await fetch('/api/contracts/compare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          originalText: compareOriginalText,
+          revisedText: compareRevisedText,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Comparison failed');
+      }
+
+      const result = await response.json();
+      setCompareResult(result);
+    } catch (err) {
+      setCompareError(err instanceof Error ? err.message : 'Comparison failed');
+    } finally {
+      setIsComparing(false);
+    }
+  }
+
+  function handleResetCompare() {
+    setCompareOriginalFile(null);
+    setCompareRevisedFile(null);
+    setCompareOriginalText(null);
+    setCompareRevisedText(null);
+    setCompareResult(null);
+    setCompareError(null);
+    setCategorizedChanges(null);
+    setCategoryFilter('all');
+  }
+
+  async function handleCategorizeChanges() {
+    if (!compareResult) return;
+
+    setIsCategorizing(true);
+    setCompareError(null);
+
+    try {
+      const response = await fetch('/api/contracts/compare/categorize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          changes: compareResult.changes,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Categorization failed');
+      }
+
+      const result = await response.json();
+      setCategorizedChanges(result.categorizedChanges);
+    } catch (err) {
+      setCompareError(err instanceof Error ? err.message : 'Categorization failed');
+    } finally {
+      setIsCategorizing(false);
+    }
+  }
+
+  async function handleExportCompareToWord() {
+    if (!compareResult) return;
+
+    setIsGeneratingDocx(true);
+    setCompareError(null);
+
+    try {
+      const response = await fetch('/api/contracts/compare/export-docx', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          changes: compareResult.changes,
+          originalFilename: compareOriginalFile?.name || 'document',
+          revisedFilename: compareRevisedFile?.name || 'document',
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to generate document');
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'comparison-results.docx';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setCompareError(err instanceof Error ? err.message : 'Failed to export');
+    } finally {
+      setIsGeneratingDocx(false);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-[#0B1220]">
       <Sidebar isCollapsed={sidebarCollapsed} onCollapsedChange={setSidebarCollapsed} />
@@ -468,6 +665,16 @@ export default function ContractReviewPage() {
               >
                 Upload Document
               </button>
+              <button
+                onClick={() => setActiveTab('compare')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  activeTab === 'compare'
+                    ? 'bg-[#A855F7]/10 text-[#A855F7]'
+                    : 'text-[#8FA3BF] hover:bg-[#151F2E]'
+                }`}
+              >
+                Compare Documents
+              </button>
             </div>
 
             {/* Input Area */}
@@ -486,7 +693,7 @@ export default function ContractReviewPage() {
                     className="w-full h-64 bg-[#0B1220] border border-white/[0.08] rounded-lg px-4 py-3 text-white text-sm placeholder-[#475569] focus:outline-none focus:ring-2 focus:ring-[#38BDF8]/50 resize-none font-mono"
                   />
                 </motion.div>
-              ) : (
+              ) : activeTab === 'upload' ? (
                 <motion.div
                   key="upload"
                   initial={{ opacity: 0 }}
@@ -555,36 +762,422 @@ export default function ContractReviewPage() {
                     </div>
                   )}
                 </motion.div>
-              )}
+              ) : activeTab === 'compare' ? (
+                <motion.div
+                  key="compare"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="space-y-4"
+                >
+                  {/* Two Upload Zones Side by Side */}
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Original Document Upload */}
+                    <div
+                      className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
+                        compareOriginalFile
+                          ? 'border-[#F59E0B]/50 bg-[#F59E0B]/5'
+                          : 'border-white/[0.08] hover:border-[#F59E0B]/50 hover:bg-[#F59E0B]/5'
+                      }`}
+                      onClick={() => document.getElementById('compare-original-upload')?.click()}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const file = e.dataTransfer.files[0];
+                        if (file) handleCompareFileUpload(file, 'original');
+                      }}
+                    >
+                      <input
+                        id="compare-original-upload"
+                        type="file"
+                        accept=".pdf,.docx,.doc,.txt"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleCompareFileUpload(file, 'original');
+                        }}
+                      />
+                      <h3 className="text-[#F59E0B] font-medium mb-2">Original Document</h3>
+                      {isExtractingOriginal ? (
+                        <div className="flex flex-col items-center gap-2">
+                          <div className="w-6 h-6 border-2 border-[#F59E0B] border-t-transparent rounded-full animate-spin" />
+                          <p className="text-[#8FA3BF] text-xs">Extracting...</p>
+                        </div>
+                      ) : compareOriginalFile ? (
+                        <div className="flex flex-col items-center gap-1">
+                          <svg className="w-8 h-8 text-[#F59E0B]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          <p className="text-white text-sm font-medium truncate max-w-full">{compareOriginalFile.name}</p>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center gap-1">
+                          <svg className="w-8 h-8 text-[#64748B]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                          </svg>
+                          <p className="text-[#8FA3BF] text-xs">Drop or click to upload</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Revised Document Upload */}
+                    <div
+                      className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
+                        compareRevisedFile
+                          ? 'border-[#22C55E]/50 bg-[#22C55E]/5'
+                          : 'border-white/[0.08] hover:border-[#22C55E]/50 hover:bg-[#22C55E]/5'
+                      }`}
+                      onClick={() => document.getElementById('compare-revised-upload')?.click()}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const file = e.dataTransfer.files[0];
+                        if (file) handleCompareFileUpload(file, 'revised');
+                      }}
+                    >
+                      <input
+                        id="compare-revised-upload"
+                        type="file"
+                        accept=".pdf,.docx,.doc,.txt"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleCompareFileUpload(file, 'revised');
+                        }}
+                      />
+                      <h3 className="text-[#22C55E] font-medium mb-2">Revised Document</h3>
+                      {isExtractingRevised ? (
+                        <div className="flex flex-col items-center gap-2">
+                          <div className="w-6 h-6 border-2 border-[#22C55E] border-t-transparent rounded-full animate-spin" />
+                          <p className="text-[#8FA3BF] text-xs">Extracting...</p>
+                        </div>
+                      ) : compareRevisedFile ? (
+                        <div className="flex flex-col items-center gap-1">
+                          <svg className="w-8 h-8 text-[#22C55E]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          <p className="text-white text-sm font-medium truncate max-w-full">{compareRevisedFile.name}</p>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center gap-1">
+                          <svg className="w-8 h-8 text-[#64748B]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                          </svg>
+                          <p className="text-[#8FA3BF] text-xs">Drop or click to upload</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Compare Error */}
+                  {compareError && (
+                    <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
+                      {compareError}
+                    </div>
+                  )}
+
+                  {/* Compare Button */}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleCompareDocuments}
+                      disabled={!compareOriginalText || !compareRevisedText || isComparing}
+                      className="flex-1 py-3 bg-gradient-to-r from-[#7C3AED] to-[#A855F7] text-white font-semibold rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                      {isComparing ? (
+                        <>
+                          <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          Comparing...
+                        </>
+                      ) : (
+                        <>
+                          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                          </svg>
+                          Compare Documents
+                        </>
+                      )}
+                    </button>
+                    {(compareOriginalFile || compareRevisedFile) && (
+                      <button
+                        onClick={handleResetCompare}
+                        className="px-4 py-3 bg-[#151F2E] text-[#8FA3BF] font-medium rounded-lg hover:bg-[#1E293B] hover:text-white transition-colors"
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Comparison Results */}
+                  {compareResult && (
+                    <div className="space-y-4">
+                      {/* Statistics Bar */}
+                      <div className="flex flex-wrap gap-4 p-4 bg-[#0B1220] rounded-lg">
+                        <div className="text-[#8FA3BF]">
+                          <span className="text-white font-bold text-lg">{compareResult.stats.totalChanges}</span>
+                          <span className="text-sm ml-1">changes</span>
+                        </div>
+                        <div className="text-red-400">
+                          <span className="font-bold text-lg">{compareResult.stats.deletions}</span>
+                          <span className="text-sm ml-1">deletions</span>
+                        </div>
+                        <div className="text-green-400">
+                          <span className="font-bold text-lg">{compareResult.stats.insertions}</span>
+                          <span className="text-sm ml-1">insertions</span>
+                        </div>
+                        <div className="text-[#64748B] text-sm flex items-center">
+                          <span>{compareResult.stats.characterChanges.toLocaleString()} chars changed</span>
+                        </div>
+
+                        {/* Categorize Button */}
+                        {!categorizedChanges && (
+                          <button
+                            onClick={handleCategorizeChanges}
+                            disabled={isCategorizing}
+                            className="ml-auto px-3 py-1 bg-[#7C3AED]/20 text-[#A855F7] text-xs font-medium rounded hover:bg-[#7C3AED]/30 transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                          >
+                            {isCategorizing ? (
+                              <>
+                                <div className="w-3 h-3 border-2 border-[#A855F7] border-t-transparent rounded-full animate-spin" />
+                                Categorizing...
+                              </>
+                            ) : (
+                              <>
+                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+                                </svg>
+                                Categorize with AI
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Category Filter (shown after categorization) */}
+                      {categorizedChanges && (
+                        <div className="flex flex-wrap items-center gap-2 p-3 bg-[#0B1220] rounded-lg">
+                          <span className="text-[#8FA3BF] text-xs font-medium">Filter by:</span>
+                          <button
+                            onClick={() => setCategoryFilter('all')}
+                            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                              categoryFilter === 'all'
+                                ? 'bg-white/10 text-white'
+                                : 'text-[#8FA3BF] hover:bg-white/5'
+                            }`}
+                          >
+                            All ({compareResult.stats.totalChanges})
+                          </button>
+                          <button
+                            onClick={() => setCategoryFilter('substantive')}
+                            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                              categoryFilter === 'substantive'
+                                ? 'bg-[#DC2626]/20 text-[#DC2626]'
+                                : 'text-[#8FA3BF] hover:bg-white/5'
+                            }`}
+                          >
+                            Substantive ({categorizedChanges.filter(c => c.category === 'substantive').length})
+                          </button>
+                          <button
+                            onClick={() => setCategoryFilter('formatting')}
+                            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                              categoryFilter === 'formatting'
+                                ? 'bg-[#64748B]/20 text-[#64748B]'
+                                : 'text-[#8FA3BF] hover:bg-white/5'
+                            }`}
+                          >
+                            Formatting ({categorizedChanges.filter(c => c.category === 'formatting').length})
+                          </button>
+                          <button
+                            onClick={() => setCategoryFilter('minor')}
+                            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                              categoryFilter === 'minor'
+                                ? 'bg-[#F59E0B]/20 text-[#F59E0B]'
+                                : 'text-[#8FA3BF] hover:bg-white/5'
+                            }`}
+                          >
+                            Minor ({categorizedChanges.filter(c => c.category === 'minor').length})
+                          </button>
+                        </div>
+                      )}
+
+                      {/* View Toggle */}
+                      <div className="flex items-center justify-between">
+                        <label className="block text-[#8FA3BF] text-sm">Comparison Results</label>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setShowSectionGrouping(!showSectionGrouping)}
+                            className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                              showSectionGrouping
+                                ? 'bg-[#A855F7]/20 text-[#A855F7]'
+                                : 'bg-[#151F2E] text-[#8FA3BF] hover:text-white'
+                            }`}
+                          >
+                            {showSectionGrouping ? 'Grouped by Section' : 'Inline View'}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Diff Display */}
+                      <div className="bg-[#0B1220] border border-white/[0.08] rounded-lg p-4 max-h-80 overflow-y-auto">
+                        {showSectionGrouping && compareResult.sections.length > 0 ? (
+                          <div className="space-y-4">
+                            {compareResult.sections.map((section, idx) => {
+                              // Filter changes in section based on category
+                              const filteredChanges = section.changes.filter(change => {
+                                if (categoryFilter === 'all') return true;
+                                if (change.type === 'equal') return true;
+                                const catChange = categorizedChanges?.find(c => c.id === change.id);
+                                return catChange?.category === categoryFilter;
+                              });
+
+                              // Skip sections with no non-equal changes after filter
+                              if (categoryFilter !== 'all' && !filteredChanges.some(c => c.type !== 'equal')) {
+                                return null;
+                              }
+
+                              return (
+                                <div key={idx} className="border-l-2 border-[#A855F7]/30 pl-3">
+                                  <h4 className="text-[#A855F7] font-medium text-sm mb-2">{section.section}</h4>
+                                  <div className="text-sm font-mono whitespace-pre-wrap">
+                                    {filteredChanges.map((change) => {
+                                      const catChange = categorizedChanges?.find(c => c.id === change.id);
+                                      const categoryColor = catChange?.category === 'substantive' ? 'border-b border-[#DC2626]/50' :
+                                                           catChange?.category === 'formatting' ? 'opacity-60' :
+                                                           catChange?.category === 'minor' ? 'border-b border-[#F59E0B]/30' : '';
+
+                                      return (
+                                        <span
+                                          key={change.id}
+                                          className={`${
+                                            change.type === 'delete' ? 'bg-red-500/20 text-red-400 line-through' :
+                                            change.type === 'insert' ? 'bg-green-500/20 text-green-400 underline' :
+                                            'text-white'
+                                          } ${change.type !== 'equal' ? categoryColor : ''}`}
+                                          title={catChange?.explanation || undefined}
+                                        >
+                                          {change.text}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="text-sm font-mono whitespace-pre-wrap">
+                            {(categorizedChanges || compareResult.changes)
+                              .filter(change => {
+                                if (categoryFilter === 'all') return true;
+                                if (change.type === 'equal') return true;
+                                const catChange = categorizedChanges?.find(c => c.id === change.id) as CategorizedChange | undefined;
+                                return catChange?.category === categoryFilter;
+                              })
+                              .map((change) => {
+                                const catChange = categorizedChanges?.find(c => c.id === change.id) as CategorizedChange | undefined;
+                                const categoryColor = catChange?.category === 'substantive' ? 'border-b border-[#DC2626]/50' :
+                                                     catChange?.category === 'formatting' ? 'opacity-60' :
+                                                     catChange?.category === 'minor' ? 'border-b border-[#F59E0B]/30' : '';
+
+                                return (
+                                  <span
+                                    key={change.id}
+                                    className={`${
+                                      change.type === 'delete' ? 'bg-red-500/20 text-red-400 line-through' :
+                                      change.type === 'insert' ? 'bg-green-500/20 text-green-400 underline' :
+                                      'text-white'
+                                    } ${change.type !== 'equal' ? categoryColor : ''}`}
+                                    title={catChange?.explanation || undefined}
+                                  >
+                                    {change.text}
+                                  </span>
+                                );
+                              })}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Zero Changes Notice */}
+                      {compareResult.stats.totalChanges === 0 && (
+                        <div className="p-4 bg-[#22C55E]/10 border border-[#22C55E]/30 rounded-lg text-[#22C55E] text-center">
+                          <svg className="w-8 h-8 mx-auto mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          <p className="font-medium">Documents are identical</p>
+                          <p className="text-sm opacity-75">No differences found after normalization</p>
+                        </div>
+                      )}
+
+                      {/* Action Buttons */}
+                      <div className="flex gap-2">
+                        <button
+                          onClick={handleExportCompareToWord}
+                          disabled={isGeneratingDocx}
+                          className="flex-1 py-2.5 bg-[#38BDF8]/10 text-[#38BDF8] font-medium rounded-lg hover:bg-[#38BDF8]/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                        >
+                          {isGeneratingDocx ? (
+                            <>
+                              <div className="w-4 h-4 border-2 border-[#38BDF8] border-t-transparent rounded-full animate-spin" />
+                              Exporting...
+                            </>
+                          ) : (
+                            <>
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                              </svg>
+                              Export to Word
+                            </>
+                          )}
+                        </button>
+                        <button
+                          onClick={handleResetCompare}
+                          className="flex-1 py-2.5 bg-[#151F2E] text-[#8FA3BF] font-medium rounded-lg hover:bg-[#1E293B] hover:text-white transition-colors"
+                        >
+                          New Comparison
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Algorithm Notice */}
+                  <div className="p-3 bg-[#A855F7]/10 border border-[#A855F7]/20 rounded-lg">
+                    <p className="text-[#A855F7] text-xs">
+                      <span className="font-medium">Deterministic Comparison</span> - Uses Google's diff-match-patch algorithm.
+                      Character-level accuracy with zero AI assumptions or hallucinations.
+                    </p>
+                  </div>
+                </motion.div>
+              ) : null}
             </AnimatePresence>
 
-            {/* Error Display */}
-            {error && (
+            {/* Error Display - only show for paste/upload tabs */}
+            {error && activeTab !== 'compare' && (
               <div className="mt-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
                 {error}
               </div>
             )}
 
-            {/* Analyze Button */}
-            <button
-              onClick={handleAnalyze}
-              disabled={isAnalyzing}
-              className="mt-4 w-full py-3 bg-gradient-to-r from-[#D97706] to-[#F59E0B] text-white font-semibold rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              {isAnalyzing ? (
-                <>
-                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  Analyzing...
-                </>
-              ) : (
-                <>
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                  </svg>
-                  Analyze Contract
-                </>
-              )}
-            </button>
+            {/* Analyze Button - only show for paste/upload tabs */}
+            {activeTab !== 'compare' && (
+              <button
+                onClick={handleAnalyze}
+                disabled={isAnalyzing}
+                className="mt-4 w-full py-3 bg-gradient-to-r from-[#D97706] to-[#F59E0B] text-white font-semibold rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {isAnalyzing ? (
+                  <>
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    Analyzing...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                    </svg>
+                    Analyze Contract
+                  </>
+                )}
+              </button>
+            )}
           </motion.div>
 
           {/* Results Panel */}
