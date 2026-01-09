@@ -316,9 +316,10 @@ function decodeXmlEntities(text: string): string {
     .replace(/&apos;/g, "'");
 }
 
-// OCR.space free API key (get yours at https://ocr.space/ocrapi/freekey)
-// Free tier: 25,000 requests/month
-const OCR_SPACE_API_KEY = process.env.OCR_SPACE_API_KEY || 'K85403628788957'; // Default free key
+// OCR.space PRO API - Get FREE PRO key at https://ocr.space/ocrapi/freekey
+// PRO tier: 5MB file limit, 25K requests/month
+const OCR_SPACE_API_KEY = process.env.OCR_SPACE_API_KEY || '';
+const MAX_OCR_FILE_SIZE = 5 * 1024 * 1024; // 5MB limit for OCR.space PRO
 
 // Extract text from PDF - tries native extraction first, falls back to OCR.space for scanned docs
 async function extractPdfText(buffer: Buffer): Promise<string> {
@@ -341,15 +342,27 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
     console.log('Native PDF extraction failed, trying OCR.space...', error);
   }
 
-  // Fall back to OCR.space for scanned documents (FREE)
+  // Fall back to OCR.space for scanned documents (FREE with PRO key)
   return extractPdfWithOCRSpace(buffer);
 }
 
-// Use OCR.space API for scanned PDFs (FREE - 25K requests/month)
+// Use OCR.space PRO API for scanned PDFs (FREE - 5MB limit, 25K requests/month)
 async function extractPdfWithOCRSpace(buffer: Buffer): Promise<string> {
+  // Check if API key is configured
+  if (!OCR_SPACE_API_KEY) {
+    throw new Error('OCR not configured. Add OCR_SPACE_API_KEY to environment variables. Get a FREE PRO key at https://ocr.space/ocrapi/freekey');
+  }
+
+  // Check file size (PRO limit is 5MB)
+  if (buffer.length > MAX_OCR_FILE_SIZE) {
+    const sizeMB = (buffer.length / (1024 * 1024)).toFixed(1);
+    throw new Error(`PDF is too large for OCR (${sizeMB}MB). Maximum size is 5MB. Try compressing the PDF or using a smaller file.`);
+  }
+
   try {
     const base64Pdf = buffer.toString('base64');
-    console.log(`OCR.space: Processing PDF (${Math.round(base64Pdf.length / 1024)}KB)...`);
+    const fileSizeKB = Math.round(buffer.length / 1024);
+    console.log(`OCR.space PRO: Processing PDF (${fileSizeKB}KB)...`);
 
     // OCR.space accepts base64 PDF directly
     const formData = new URLSearchParams();
@@ -377,7 +390,12 @@ async function extractPdfWithOCRSpace(buffer: Buffer): Promise<string> {
     const data = await response.json();
 
     if (data.IsErroredOnProcessing) {
-      throw new Error(data.ErrorMessage?.[0] || 'OCR processing failed');
+      const errorMsg = data.ErrorMessage?.[0] || 'OCR processing failed';
+      // Provide helpful message for common errors
+      if (errorMsg.includes('size')) {
+        throw new Error('PDF exceeds OCR size limit. Get a PRO API key at https://ocr.space/ocrapi/freekey for 5MB limit.');
+      }
+      throw new Error(errorMsg);
     }
 
     // Combine text from all pages
@@ -389,7 +407,7 @@ async function extractPdfWithOCRSpace(buffer: Buffer): Promise<string> {
     console.log(`OCR.space complete: ${extractedText.length} chars extracted`);
 
     if (!extractedText) {
-      throw new Error('OCR could not extract text from the PDF');
+      throw new Error('OCR could not extract text from the PDF. The document may be image-based with unreadable text.');
     }
 
     return extractedText;
