@@ -30,7 +30,7 @@ interface ReviewHistory {
   status: 'draft' | 'sent_to_boss' | 'sent_to_client' | 'approved';
 }
 
-// Types for document comparison
+// Types for document comparison (legacy diff mode)
 interface CompareChange {
   id: number;
   type: 'equal' | 'delete' | 'insert';
@@ -52,6 +52,7 @@ interface CompareSection {
 }
 
 interface CompareResult {
+  mode?: 'ai' | 'diff';
   changes: CompareChange[];
   stats: CompareStats;
   sections: CompareSection[];
@@ -62,6 +63,39 @@ interface CompareResult {
 interface CategorizedChange extends CompareChange {
   category?: 'substantive' | 'formatting' | 'minor';
   explanation?: string;
+}
+
+// Types for AI-powered comparison
+interface AICompareChange {
+  category: string;
+  section: string;
+  description: string;
+  originalText: string;
+  revisedText: string;
+  significance: 'high' | 'medium' | 'low';
+  impact: string;
+}
+
+interface AICompareResult {
+  mode: 'ai';
+  documentInfo: {
+    originalTitle: string;
+    revisedTitle: string;
+    originalDate: string;
+    revisedDate: string;
+  };
+  changes: AICompareChange[];
+  summary: {
+    totalChanges: number;
+    highSignificance: number;
+    mediumSignificance: number;
+    lowSignificance: number;
+    keyTakeaways: string[];
+  };
+  addedSections: string[];
+  removedSections: string[];
+  normalizedOriginal: string;
+  normalizedRevised: string;
 }
 
 // Models for contract review via OpenRouter - legal-grade only
@@ -104,11 +138,13 @@ export default function ContractReviewPage() {
   const [isExtractingRevised, setIsExtractingRevised] = useState(false);
   const [isComparing, setIsComparing] = useState(false);
   const [compareResult, setCompareResult] = useState<CompareResult | null>(null);
+  const [aiCompareResult, setAiCompareResult] = useState<AICompareResult | null>(null);
   const [compareError, setCompareError] = useState<string | null>(null);
   const [showSectionGrouping, setShowSectionGrouping] = useState(true);
   const [isCategorizing, setIsCategorizing] = useState(false);
   const [categorizedChanges, setCategorizedChanges] = useState<CategorizedChange[] | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<'all' | 'substantive' | 'formatting' | 'minor'>('all');
+  const [significanceFilter, setSignificanceFilter] = useState<'all' | 'high' | 'medium' | 'low'>('all');
 
   // Analysis comparison state (for showing diff after AI analysis)
   const [showAnalysisComparison, setShowAnalysisComparison] = useState(false);
@@ -455,6 +491,7 @@ export default function ContractReviewPage() {
     setIsComparing(true);
     setCompareError(null);
     setCompareResult(null);
+    setAiCompareResult(null);
 
     try {
       const response = await fetch('/api/contracts/compare', {
@@ -463,6 +500,7 @@ export default function ContractReviewPage() {
         body: JSON.stringify({
           originalText: compareOriginalText,
           revisedText: compareRevisedText,
+          useAI: true,
         }),
       });
 
@@ -472,7 +510,13 @@ export default function ContractReviewPage() {
       }
 
       const result = await response.json();
-      setCompareResult(result);
+
+      // Handle AI mode vs diff mode
+      if (result.mode === 'ai') {
+        setAiCompareResult(result as AICompareResult);
+      } else {
+        setCompareResult(result as CompareResult);
+      }
     } catch (err) {
       setCompareError(err instanceof Error ? err.message : 'Comparison failed');
     } finally {
@@ -486,9 +530,11 @@ export default function ContractReviewPage() {
     setCompareOriginalText(null);
     setCompareRevisedText(null);
     setCompareResult(null);
+    setAiCompareResult(null);
     setCompareError(null);
     setCategorizedChanges(null);
     setCategoryFilter('all');
+    setSignificanceFilter('all');
   }
 
   async function handleCategorizeChanges() {
@@ -1320,8 +1366,206 @@ export default function ContractReviewPage() {
                   </button>
                 </div>
               </div>
+            ) : activeTab === 'compare' && aiCompareResult ? (
+              /* AI-Powered Compare Results */
+              <div className="space-y-4">
+                {/* Document Info Header */}
+                <div className="p-4 bg-gradient-to-r from-[#7C3AED]/10 to-[#A855F7]/10 border border-[#A855F7]/20 rounded-lg">
+                  <div className="flex items-center gap-2 mb-3">
+                    <svg className="w-5 h-5 text-[#A855F7]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                    </svg>
+                    <span className="text-[#A855F7] font-medium">AI-Powered Contract Comparison</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <span className="text-[#64748B]">Original:</span>
+                      <span className="text-white ml-2">{aiCompareResult.documentInfo.originalTitle}</span>
+                      {aiCompareResult.documentInfo.originalDate && (
+                        <span className="text-[#F59E0B] ml-2">({aiCompareResult.documentInfo.originalDate})</span>
+                      )}
+                    </div>
+                    <div>
+                      <span className="text-[#64748B]">Revised:</span>
+                      <span className="text-white ml-2">{aiCompareResult.documentInfo.revisedTitle}</span>
+                      {aiCompareResult.documentInfo.revisedDate && (
+                        <span className="text-[#22C55E] ml-2">({aiCompareResult.documentInfo.revisedDate})</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Summary Stats */}
+                <div className="flex flex-wrap gap-3 p-4 bg-[#0B1220] rounded-lg">
+                  <div className="text-[#8FA3BF]">
+                    <span className="text-white font-bold text-lg">{aiCompareResult.summary.totalChanges}</span>
+                    <span className="text-sm ml-1">changes found</span>
+                  </div>
+                  <div className="text-red-400">
+                    <span className="font-bold text-lg">{aiCompareResult.summary.highSignificance}</span>
+                    <span className="text-sm ml-1">high</span>
+                  </div>
+                  <div className="text-[#F59E0B]">
+                    <span className="font-bold text-lg">{aiCompareResult.summary.mediumSignificance}</span>
+                    <span className="text-sm ml-1">medium</span>
+                  </div>
+                  <div className="text-[#64748B]">
+                    <span className="font-bold text-lg">{aiCompareResult.summary.lowSignificance}</span>
+                    <span className="text-sm ml-1">low</span>
+                  </div>
+                </div>
+
+                {/* Key Takeaways */}
+                {aiCompareResult.summary.keyTakeaways && aiCompareResult.summary.keyTakeaways.length > 0 && (
+                  <div className="p-4 bg-[#0B1220] border border-white/[0.08] rounded-lg">
+                    <h4 className="text-white font-medium mb-3 flex items-center gap-2">
+                      <svg className="w-4 h-4 text-[#38BDF8]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      Key Takeaways
+                    </h4>
+                    <ul className="space-y-2">
+                      {aiCompareResult.summary.keyTakeaways.map((takeaway, idx) => (
+                        <li key={idx} className="flex items-start gap-2 text-sm text-[#CBD5E1]">
+                          <span className="text-[#38BDF8] mt-0.5">•</span>
+                          <span>{takeaway}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Significance Filter */}
+                <div className="flex flex-wrap items-center gap-2 p-3 bg-[#0B1220] rounded-lg">
+                  <span className="text-[#8FA3BF] text-xs font-medium">Filter by significance:</span>
+                  <button
+                    onClick={() => setSignificanceFilter('all')}
+                    className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                      significanceFilter === 'all' ? 'bg-white/10 text-white' : 'text-[#8FA3BF] hover:bg-white/5'
+                    }`}
+                  >
+                    All ({aiCompareResult.changes.length})
+                  </button>
+                  <button
+                    onClick={() => setSignificanceFilter('high')}
+                    className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                      significanceFilter === 'high' ? 'bg-red-500/20 text-red-400' : 'text-[#8FA3BF] hover:bg-white/5'
+                    }`}
+                  >
+                    High ({aiCompareResult.changes.filter(c => c.significance === 'high').length})
+                  </button>
+                  <button
+                    onClick={() => setSignificanceFilter('medium')}
+                    className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                      significanceFilter === 'medium' ? 'bg-[#F59E0B]/20 text-[#F59E0B]' : 'text-[#8FA3BF] hover:bg-white/5'
+                    }`}
+                  >
+                    Medium ({aiCompareResult.changes.filter(c => c.significance === 'medium').length})
+                  </button>
+                  <button
+                    onClick={() => setSignificanceFilter('low')}
+                    className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                      significanceFilter === 'low' ? 'bg-[#64748B]/20 text-[#64748B]' : 'text-[#8FA3BF] hover:bg-white/5'
+                    }`}
+                  >
+                    Low ({aiCompareResult.changes.filter(c => c.significance === 'low').length})
+                  </button>
+                </div>
+
+                {/* Changes List */}
+                <div className="space-y-3 max-h-[500px] overflow-y-auto">
+                  {aiCompareResult.changes
+                    .filter(change => significanceFilter === 'all' || change.significance === significanceFilter)
+                    .map((change, idx) => (
+                    <div
+                      key={idx}
+                      className={`p-4 rounded-lg border ${
+                        change.significance === 'high' ? 'bg-red-500/5 border-red-500/30' :
+                        change.significance === 'medium' ? 'bg-[#F59E0B]/5 border-[#F59E0B]/30' :
+                        'bg-[#0B1220] border-white/[0.08]'
+                      }`}
+                    >
+                      {/* Change Header */}
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                          change.significance === 'high' ? 'bg-red-500/20 text-red-400' :
+                          change.significance === 'medium' ? 'bg-[#F59E0B]/20 text-[#F59E0B]' :
+                          'bg-[#64748B]/20 text-[#64748B]'
+                        }`}>
+                          {change.significance.toUpperCase()}
+                        </span>
+                        <span className="px-2 py-0.5 rounded text-xs font-medium bg-[#A855F7]/20 text-[#A855F7]">
+                          {change.category}
+                        </span>
+                        {change.section && (
+                          <span className="text-[#64748B] text-xs">{change.section}</span>
+                        )}
+                      </div>
+
+                      {/* Description */}
+                      <p className="text-white text-sm mb-3">{change.description}</p>
+
+                      {/* Original vs Revised */}
+                      <div className="grid grid-cols-2 gap-3 text-xs">
+                        <div className="p-2 bg-red-500/10 border border-red-500/20 rounded">
+                          <span className="text-red-400 font-medium block mb-1">Original:</span>
+                          <span className="text-[#CBD5E1]">{change.originalText || '(Not present)'}</span>
+                        </div>
+                        <div className="p-2 bg-green-500/10 border border-green-500/20 rounded">
+                          <span className="text-green-400 font-medium block mb-1">Revised:</span>
+                          <span className="text-[#CBD5E1]">{change.revisedText || '(Not present)'}</span>
+                        </div>
+                      </div>
+
+                      {/* Impact */}
+                      {change.impact && (
+                        <div className="mt-2 pt-2 border-t border-white/[0.08]">
+                          <span className="text-[#64748B] text-xs">Impact: </span>
+                          <span className="text-[#8FA3BF] text-xs">{change.impact}</span>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Added/Removed Sections */}
+                {(aiCompareResult.addedSections?.length > 0 || aiCompareResult.removedSections?.length > 0) && (
+                  <div className="grid grid-cols-2 gap-4">
+                    {aiCompareResult.addedSections?.length > 0 && (
+                      <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
+                        <h4 className="text-green-400 font-medium text-sm mb-2">Added Sections</h4>
+                        <ul className="text-xs text-[#CBD5E1] space-y-1">
+                          {aiCompareResult.addedSections.map((section, idx) => (
+                            <li key={idx}>+ {section}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {aiCompareResult.removedSections?.length > 0 && (
+                      <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
+                        <h4 className="text-red-400 font-medium text-sm mb-2">Removed Sections</h4>
+                        <ul className="text-xs text-[#CBD5E1] space-y-1">
+                          {aiCompareResult.removedSections.map((section, idx) => (
+                            <li key={idx}>- {section}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Action Buttons */}
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleResetCompare}
+                    className="flex-1 py-2.5 bg-[#151F2E] text-[#8FA3BF] font-medium rounded-lg hover:bg-[#1E293B] hover:text-white transition-colors"
+                  >
+                    New Comparison
+                  </button>
+                </div>
+              </div>
             ) : activeTab === 'compare' && compareResult ? (
-              /* Compare Tab Results */
+              /* Legacy Diff Compare Results (fallback) */
               <div className="space-y-4">
                 {/* Statistics Bar */}
                 <div className="flex flex-wrap gap-4 p-4 bg-[#0B1220] rounded-lg">
