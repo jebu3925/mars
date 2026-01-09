@@ -626,7 +626,21 @@ interface NotionTask {
 }
 
 // Contract Row Component with Inline Editing
-function ContractRow({ contract, index, onUpdate, focusMode = false }: { contract: Contract; index: number; onUpdate?: () => void; focusMode?: boolean }) {
+function ContractRow({
+  contract,
+  index,
+  onUpdate,
+  focusMode = false,
+  pendingStatus,
+  onPendingStatusChange,
+}: {
+  contract: Contract;
+  index: number;
+  onUpdate?: () => void;
+  focusMode?: boolean;
+  pendingStatus?: string;
+  onPendingStatusChange?: (contractId: string, salesforceId: string | undefined, contractName: string, notionName: string | undefined, newStatus: string, originalStatus: string) => void;
+}) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -647,7 +661,11 @@ function ContractRow({ contract, index, onUpdate, focusMode = false }: { contrac
   const [quickTaskDueDate, setQuickTaskDueDate] = useState('');
   const [isCreatingQuickTask, setIsCreatingQuickTask] = useState(false);
   const quickTaskRef = useRef<HTMLDivElement>(null);
-  const statusColor = stageColors[contract.status] || getStatusColor(contract.status);
+
+  // Use pending status if available (batch mode)
+  const effectiveStatus = pendingStatus || contract.status;
+  const hasPendingChange = pendingStatus !== undefined && pendingStatus !== contract.status;
+  const statusColor = stageColors[effectiveStatus] || getStatusColor(effectiveStatus);
 
   // Close quick add popover when clicking outside
   useEffect(() => {
@@ -792,10 +810,26 @@ function ContractRow({ contract, index, onUpdate, focusMode = false }: { contrac
     }
   };
 
-  // Quick status change without edit mode
+  // Quick status change - batch mode (pending) or immediate save
   const handleQuickStatusChange = async (newStatus: string) => {
-    if (newStatus === contract.status) return;
+    // Get the effective current status (may be a pending change)
+    const effectiveStatus = pendingStatus || contract.status;
+    if (newStatus === effectiveStatus) return;
 
+    // If batch mode is enabled, just update pending changes
+    if (onPendingStatusChange) {
+      onPendingStatusChange(
+        contract.id,
+        contract.salesforceId,
+        contract.name,
+        contract.notionName,
+        newStatus,
+        contract.status // original status for comparison
+      );
+      return;
+    }
+
+    // Otherwise, save immediately (legacy behavior)
     setIsSaving(true);
     try {
       const response = await fetch('/api/contracts/update', {
@@ -1002,7 +1036,7 @@ function ContractRow({ contract, index, onUpdate, focusMode = false }: { contrac
                   style={{ background: statusColor }}
                 />
                 <select
-                  value={contract.status}
+                  value={effectiveStatus}
                   onChange={e => handleQuickStatusChange(e.target.value)}
                   disabled={isSaving}
                   className={`
@@ -1011,6 +1045,7 @@ function ContractRow({ contract, index, onUpdate, focusMode = false }: { contrac
                     border-0 outline-none
                     transition-all duration-200
                     ${isSaving ? 'opacity-50 cursor-wait' : 'hover:ring-1 hover:ring-white/20'}
+                    ${hasPendingChange ? 'ring-2 ring-yellow-500/60' : ''}
                   `}
                   style={{
                     background: `${statusColor}20`,
@@ -1021,6 +1056,10 @@ function ContractRow({ contract, index, onUpdate, focusMode = false }: { contrac
                     <option key={s} value={s} className="bg-[#0a1628] text-white">{s}</option>
                   ))}
                 </select>
+                {/* Pending change indicator */}
+                {hasPendingChange && (
+                  <div className="absolute -top-1 -right-1 w-2 h-2 bg-yellow-500 rounded-full" title="Unsaved change" />
+                )}
                 {/* Dropdown arrow */}
                 <div className="absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none">
                   <svg
@@ -1585,6 +1624,92 @@ export default function ContractsDashboard() {
   const [selectedContractIndex, setSelectedContractIndex] = useState(0);
   const [taskStats, setTaskStats] = useState<{ pending: number; overdue: number } | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Batch editing state - track pending status changes
+  const [pendingChanges, setPendingChanges] = useState<Record<string, { contractId: string; salesforceId?: string; contractName: string; notionName?: string; newStatus: string; originalStatus: string }>>({});
+  const [isSavingBatch, setIsSavingBatch] = useState(false);
+  const [batchSaveProgress, setBatchSaveProgress] = useState<{ current: number; total: number } | null>(null);
+
+  // Handle pending status change (batch mode)
+  const handlePendingStatusChange = useCallback((contractId: string, salesforceId: string | undefined, contractName: string, notionName: string | undefined, newStatus: string, originalStatus: string) => {
+    if (newStatus === originalStatus) {
+      // If changed back to original, remove from pending
+      setPendingChanges(prev => {
+        const updated = { ...prev };
+        delete updated[contractId];
+        return updated;
+      });
+    } else {
+      // Add or update pending change
+      setPendingChanges(prev => ({
+        ...prev,
+        [contractId]: { contractId, salesforceId, contractName, notionName, newStatus, originalStatus }
+      }));
+    }
+  }, []);
+
+  // Clear all pending changes
+  const handleClearPendingChanges = useCallback(() => {
+    setPendingChanges({});
+  }, []);
+
+  // Save all pending changes
+  const handleSavePendingChanges = useCallback(async () => {
+    const changes = Object.values(pendingChanges);
+    if (changes.length === 0) return;
+
+    setIsSavingBatch(true);
+    setBatchSaveProgress({ current: 0, total: changes.length });
+
+    const results: { success: boolean; contractName: string; error?: string }[] = [];
+
+    for (let i = 0; i < changes.length; i++) {
+      const change = changes[i];
+      setBatchSaveProgress({ current: i + 1, total: changes.length });
+
+      try {
+        const response = await fetch('/api/contracts/update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            salesforceId: change.salesforceId || change.contractId,
+            contractName: change.notionName || change.contractName,
+            updates: { status: change.newStatus },
+          }),
+        });
+
+        const result = await response.json();
+        results.push({
+          success: response.ok,
+          contractName: change.contractName,
+          error: response.ok ? undefined : result.error
+        });
+      } catch (err) {
+        results.push({
+          success: false,
+          contractName: change.contractName,
+          error: 'Network error'
+        });
+      }
+    }
+
+    // Clear pending changes and refresh data
+    setPendingChanges({});
+    setIsSavingBatch(false);
+    setBatchSaveProgress(null);
+
+    // Show summary
+    const succeeded = results.filter(r => r.success).length;
+    const failed = results.filter(r => !r.success);
+
+    if (failed.length > 0) {
+      const failedNames = failed.map(f => `${f.contractName}: ${f.error}`).join('\n');
+      alert(`Saved ${succeeded}/${results.length} contracts.\n\nFailed:\n${failedNames}`);
+    }
+
+    // Refresh data
+    fetchData();
+  }, [pendingChanges]);
 
   // Fetch task stats for KPI display
   useEffect(() => {
@@ -2644,7 +2769,15 @@ export default function ContractsDashboard() {
                 <div className="max-h-[600px] overflow-y-auto">
                   {filteredContracts.length > 0 ? (
                     filteredContracts.map((contract, index) => (
-                      <ContractRow key={contract.id} contract={contract} index={index} onUpdate={handleDataRefresh} focusMode={focusMode} />
+                      <ContractRow
+                        key={contract.id}
+                        contract={contract}
+                        index={index}
+                        onUpdate={handleDataRefresh}
+                        focusMode={focusMode}
+                        pendingStatus={pendingChanges[contract.id]?.newStatus}
+                        onPendingStatusChange={handlePendingStatusChange}
+                      />
                     ))
                   ) : (
                     <div className="px-6 py-12 text-center text-gray-500">
@@ -2696,6 +2829,55 @@ export default function ContractsDashboard() {
           </motion.div>
         </div>
       </motion.div>
+
+      {/* Floating Save All Button - appears when there are pending changes */}
+      <AnimatePresence>
+        {Object.keys(pendingChanges).length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 50, scale: 0.9 }}
+            className="fixed bottom-8 right-8 z-50 flex items-center gap-3"
+          >
+            {/* Change count badge */}
+            <div className="bg-[#1E293B] border border-yellow-500/30 rounded-lg px-4 py-2 shadow-lg">
+              <span className="text-yellow-400 font-medium">
+                {Object.keys(pendingChanges).length} unsaved {Object.keys(pendingChanges).length === 1 ? 'change' : 'changes'}
+              </span>
+            </div>
+
+            {/* Discard button */}
+            <button
+              onClick={handleClearPendingChanges}
+              disabled={isSavingBatch}
+              className="px-4 py-3 bg-[#1E293B] border border-white/10 text-[#8FA3BF] rounded-lg hover:bg-[#2D3B4F] hover:text-white transition-colors disabled:opacity-50 shadow-lg"
+            >
+              Discard
+            </button>
+
+            {/* Save All button */}
+            <button
+              onClick={handleSavePendingChanges}
+              disabled={isSavingBatch}
+              className="px-6 py-3 bg-gradient-to-r from-[#22C55E] to-[#16A34A] text-white font-semibold rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 shadow-lg flex items-center gap-2"
+            >
+              {isSavingBatch ? (
+                <>
+                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  {batchSaveProgress ? `Saving ${batchSaveProgress.current}/${batchSaveProgress.total}...` : 'Saving...'}
+                </>
+              ) : (
+                <>
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  Save All Changes
+                </>
+              )}
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
