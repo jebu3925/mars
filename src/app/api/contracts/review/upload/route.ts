@@ -318,8 +318,9 @@ function decodeXmlEntities(text: string): string {
 
 // OCR.space PRO API - Get FREE PRO key at https://ocr.space/ocrapi/freekey
 // PRO tier: 5MB file limit, 25K requests/month
+// Note: base64 encoding adds ~33% overhead, so max raw file is ~3.7MB
 const OCR_SPACE_API_KEY = process.env.OCR_SPACE_API_KEY || '';
-const MAX_OCR_FILE_SIZE = 5 * 1024 * 1024; // 5MB limit for OCR.space PRO
+const MAX_OCR_FILE_SIZE = 3.7 * 1024 * 1024; // ~3.7MB raw = ~5MB base64
 
 // Extract text from PDF - tries native extraction first, falls back to OCR.space for scanned docs
 async function extractPdfText(buffer: Buffer): Promise<string> {
@@ -362,7 +363,9 @@ async function extractPdfWithOCRSpace(buffer: Buffer): Promise<string> {
   try {
     const base64Pdf = buffer.toString('base64');
     const fileSizeKB = Math.round(buffer.length / 1024);
-    console.log(`OCR.space PRO: Processing PDF (${fileSizeKB}KB)...`);
+    const base64SizeKB = Math.round(base64Pdf.length / 1024);
+    console.log(`OCR.space PRO: Processing PDF (raw: ${fileSizeKB}KB, base64: ${base64SizeKB}KB)...`);
+    console.log(`OCR.space API key configured: ${OCR_SPACE_API_KEY ? 'Yes (starts with ' + OCR_SPACE_API_KEY.substring(0, 4) + '...)' : 'NO'}`);
 
     // OCR.space accepts base64 PDF directly
     const formData = new URLSearchParams();
@@ -391,9 +394,10 @@ async function extractPdfWithOCRSpace(buffer: Buffer): Promise<string> {
 
     if (data.IsErroredOnProcessing) {
       const errorMsg = data.ErrorMessage?.[0] || 'OCR processing failed';
+      console.error('OCR.space error response:', JSON.stringify(data, null, 2));
       // Provide helpful message for common errors
-      if (errorMsg.includes('size')) {
-        throw new Error('PDF exceeds OCR size limit. Get a PRO API key at https://ocr.space/ocrapi/freekey for 5MB limit.');
+      if (errorMsg.toLowerCase().includes('size') || errorMsg.toLowerCase().includes('limit')) {
+        throw new Error(`File too large for OCR. Raw: ${fileSizeKB}KB, Base64: ${base64SizeKB}KB. PRO limit is 5MB base64. Original error: ${errorMsg}`);
       }
       throw new Error(errorMsg);
     }
