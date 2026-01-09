@@ -1762,17 +1762,18 @@ export default function ContractsDashboard() {
 
         if (result.configured === false) {
           setSalesforceStatus('not_configured');
-          setDataSource('supabase');
+          // Keep supabase - don't switch
         } else if (result.needsAuth) {
           setSalesforceStatus('needs_auth');
-          setDataSource('supabase');
+          // Keep supabase - don't switch
         } else if (!result.error) {
           setSalesforceStatus('connected');
-          setDataSource('salesforce');
+          // DON'T auto-switch to salesforce - status field lives in Supabase
+          // User can manually switch if needed
         }
       } catch {
         setSalesforceStatus('not_configured');
-        setDataSource('supabase');
+        // Keep supabase - don't switch
       }
     }
     checkSalesforce();
@@ -1781,7 +1782,7 @@ export default function ContractsDashboard() {
     const params = new URLSearchParams(window.location.search);
     if (params.get('salesforce') === 'connected') {
       setSalesforceStatus('connected');
-      setDataSource('salesforce');
+      // Don't auto-switch to salesforce - keep supabase for status tracking
       window.history.replaceState({}, '', '/contracts-dashboard');
     }
   }, []);
