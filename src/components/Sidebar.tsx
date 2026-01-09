@@ -20,7 +20,7 @@ export const useSidebar = () => useContext(SidebarContext);
 
 // Dashboard access by role
 const DASHBOARD_ACCESS: Record<string, string[]> = {
-  admin: ['/contracts-dashboard', '/mcc-dashboard', '/closeout-dashboard', '/pm-dashboard', '/contracts/review'],
+  admin: ['/contracts-dashboard', '/mcc-dashboard', '/closeout-dashboard', '/pm-dashboard', '/contracts/review', '/admin'],
   sales: ['/contracts-dashboard'],
   finance: ['/mcc-dashboard', '/closeout-dashboard'],
   pm: ['/closeout-dashboard', '/pm-dashboard'],
@@ -119,6 +119,20 @@ const navCategories: NavCategory[] = [
           </svg>
         ),
         disabled: true,
+      },
+    ],
+  },
+  {
+    name: 'Administration',
+    items: [
+      {
+        name: 'User Management',
+        href: '/admin',
+        icon: (
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+          </svg>
+        ),
       },
     ],
   },
@@ -228,7 +242,7 @@ export default function Sidebar({ isCollapsed: controlledCollapsed, onCollapsedC
         width: isCollapsed ? 72 : 256,
       }}
       transition={{ duration: 0.2, ease: 'easeOut' }}
-      className="fixed left-0 top-0 h-full bg-[#0B1220] z-50 overflow-hidden"
+      className="fixed left-0 top-0 h-full bg-[#0B1220] z-50 overflow-hidden flex flex-col"
     >
       {/* Collapse Toggle Button */}
       <button
@@ -249,7 +263,7 @@ export default function Sidebar({ isCollapsed: controlledCollapsed, onCollapsedC
       </button>
 
       {/* Logo */}
-      <div className={`p-6 ${isCollapsed ? 'px-3' : ''}`}>
+      <div className={`flex-shrink-0 p-6 ${isCollapsed ? 'px-3' : ''}`}>
         <Link href="/" className="block">
           {isCollapsed ? (
             <div className="w-10 h-10 rounded-lg bg-[#1E293B] flex items-center justify-center">
@@ -278,7 +292,7 @@ export default function Sidebar({ isCollapsed: controlledCollapsed, onCollapsedC
       </div>
 
       {/* Navigation by Category */}
-      <nav className={`px-3 space-y-4 overflow-y-auto max-h-[calc(100vh-280px)] ${isCollapsed ? 'px-2' : ''}`}>
+      <nav className={`flex-1 px-3 space-y-4 overflow-y-auto ${isCollapsed ? 'px-2' : ''}`}>
         {filteredNavCategories.map((category) => (
           <div key={category.name}>
             <AnimatePresence>
@@ -355,87 +369,85 @@ export default function Sidebar({ isCollapsed: controlledCollapsed, onCollapsedC
         ))}
       </nav>
 
-      {/* Data Sources - only show when expanded */}
-      <AnimatePresence>
-        {!isCollapsed && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute bottom-0 left-0 right-0 p-4"
-          >
-            <p className="text-[10px] font-semibold text-[#475569] uppercase tracking-[0.08em] px-3 mb-3">
-              Data Sources
-            </p>
-            <div className="space-y-1">
-              <div className="flex items-center gap-3 px-3 py-1.5">
-                <div className="w-1.5 h-1.5 rounded-full bg-[#38BDF8]" />
-                <span className="text-[12px] text-[#8FA3BF]">Salesforce</span>
-                <span className="ml-auto text-[9px] text-[#22C55E] font-medium">Live</span>
-              </div>
-              <div className="flex items-center gap-3 px-3 py-1.5">
-                <div className="w-1.5 h-1.5 rounded-full bg-[#EAF2FF]" />
-                <span className="text-[12px] text-[#8FA3BF]">Notion</span>
-                <span className="ml-auto text-[9px] text-[#22C55E] font-medium">Live</span>
-              </div>
-              <div className="flex items-center gap-3 px-3 py-1.5">
-                <div className="w-1.5 h-1.5 rounded-full bg-[#E16259]" />
-                <span className="text-[12px] text-[#8FA3BF]">Asana</span>
-                <span className="ml-auto text-[9px] text-[#22C55E] font-medium">Live</span>
-              </div>
-              <div className="flex items-center gap-3 px-3 py-1.5">
-                <div className="w-1.5 h-1.5 rounded-full bg-[#FFD700]" />
-                <span className="text-[12px] text-[#8FA3BF]">DocuSign</span>
-                <span className="ml-auto text-[9px] text-[#F59E0B] font-medium">Pending</span>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Collapsed Data Sources indicator */}
-      {isCollapsed && (
-        <div className="absolute bottom-16 left-0 right-0 flex flex-col items-center gap-2">
-          <div className="w-1.5 h-1.5 rounded-full bg-[#22C55E] animate-pulse" title="Data sources connected" />
-        </div>
-      )}
-
-      {/* User info and Logout */}
-      {user && (
-        <div className={`absolute bottom-0 left-0 right-0 p-3 border-t border-[#1E293B] bg-[#0B1220] ${isCollapsed ? 'px-2' : ''}`}>
+      {/* Bottom Section - Data Sources + User Info */}
+      <div className="flex-shrink-0 border-t border-[#1E293B]">
+        {/* Data Sources - only show when expanded */}
+        <AnimatePresence>
           {!isCollapsed && (
-            <div className="flex items-center gap-2 mb-2 px-2">
-              <div className="w-6 h-6 rounded-full bg-[#1E293B] flex items-center justify-center">
-                <span className="text-[10px] text-[#8FA3BF] font-medium">
-                  {user.email?.charAt(0).toUpperCase()}
-                </span>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="p-4 pb-2"
+            >
+              <p className="text-[10px] font-semibold text-[#475569] uppercase tracking-[0.08em] px-3 mb-2">
+                Data Sources
+              </p>
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-3 px-3 py-1">
+                  <div className="w-1.5 h-1.5 rounded-full bg-[#38BDF8]" />
+                  <span className="text-[11px] text-[#8FA3BF]">Salesforce</span>
+                  <span className="ml-auto text-[9px] text-[#22C55E] font-medium">Live</span>
+                </div>
+                <div className="flex items-center gap-3 px-3 py-1">
+                  <div className="w-1.5 h-1.5 rounded-full bg-[#E16259]" />
+                  <span className="text-[11px] text-[#8FA3BF]">Asana</span>
+                  <span className="ml-auto text-[9px] text-[#22C55E] font-medium">Live</span>
+                </div>
+                <div className="flex items-center gap-3 px-3 py-1">
+                  <div className="w-1.5 h-1.5 rounded-full bg-[#FFD700]" />
+                  <span className="text-[11px] text-[#8FA3BF]">DocuSign</span>
+                  <span className="ml-auto text-[9px] text-[#22C55E] font-medium">Live</span>
+                </div>
               </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-[11px] text-[#8FA3BF] truncate">{user.email}</p>
-                <p className="text-[9px] text-[#475569] capitalize">{userRole}</p>
-              </div>
-            </div>
+            </motion.div>
           )}
-          <button
-            onClick={handleLogout}
-            disabled={loggingOut}
-            className={`
-              flex items-center gap-2 w-full px-2 py-2 rounded-lg
-              text-[#8FA3BF] hover:bg-[#1E293B] hover:text-white transition-all
-              ${isCollapsed ? 'justify-center' : ''}
-              disabled:opacity-50
-            `}
-            title="Sign out"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-            </svg>
+        </AnimatePresence>
+
+        {/* Collapsed Data Sources indicator */}
+        {isCollapsed && (
+          <div className="flex justify-center py-3">
+            <div className="w-1.5 h-1.5 rounded-full bg-[#22C55E] animate-pulse" title="Data sources connected" />
+          </div>
+        )}
+
+        {/* User info and Logout */}
+        {user && (
+          <div className={`p-3 pt-2 border-t border-[#1E293B] ${isCollapsed ? 'px-2' : ''}`}>
             {!isCollapsed && (
-              <span className="text-[12px]">{loggingOut ? 'Signing out...' : 'Sign out'}</span>
+              <div className="flex items-center gap-2 mb-2 px-2">
+                <div className="w-6 h-6 rounded-full bg-[#1E293B] flex items-center justify-center">
+                  <span className="text-[10px] text-[#8FA3BF] font-medium">
+                    {user.email?.charAt(0).toUpperCase()}
+                  </span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[11px] text-[#8FA3BF] truncate">{user.email}</p>
+                  <p className="text-[9px] text-[#475569] capitalize">{userRole}</p>
+                </div>
+              </div>
             )}
-          </button>
-        </div>
-      )}
+            <button
+              onClick={handleLogout}
+              disabled={loggingOut}
+              className={`
+                flex items-center gap-2 w-full px-2 py-2 rounded-lg
+                text-[#8FA3BF] hover:bg-[#1E293B] hover:text-white transition-all
+                ${isCollapsed ? 'justify-center' : ''}
+                disabled:opacity-50
+              `}
+              title="Sign out"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+              {!isCollapsed && (
+                <span className="text-[12px]">{loggingOut ? 'Signing out...' : 'Sign out'}</span>
+              )}
+            </button>
+          </div>
+        )}
+      </div>
     </motion.div>
   );
 }
