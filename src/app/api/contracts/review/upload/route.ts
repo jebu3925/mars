@@ -399,13 +399,22 @@ async function extractPdfWithOCRSpace(buffer: Buffer): Promise<string> {
         body: formData.toString(),
       });
 
-      if (!response.ok) {
-        console.error(`OCR.space API error on page ${i + 1}: ${response.status}`);
-        extractedTexts.push(`[Page ${i + 1}: OCR failed]`);
+      // Handle non-JSON responses (rate limits, server errors, etc.)
+      const responseText = await response.text();
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        console.error(`OCR.space returned non-JSON on page ${i + 1}:`, responseText.substring(0, 200));
+        extractedTexts.push(`[Page ${i + 1}: OCR service error]`);
         continue;
       }
 
-      const data = await response.json();
+      if (!response.ok) {
+        console.error(`OCR.space API error on page ${i + 1}: ${response.status}`, responseText.substring(0, 200));
+        extractedTexts.push(`[Page ${i + 1}: OCR failed - ${response.status}]`);
+        continue;
+      }
 
       if (data.IsErroredOnProcessing) {
         console.error(`OCR.space error on page ${i + 1}:`, data.ErrorMessage);
@@ -423,9 +432,9 @@ async function extractPdfWithOCRSpace(buffer: Buffer): Promise<string> {
         extractedTexts.push(pageText);
       }
 
-      // Small delay to avoid rate limiting
+      // Delay between requests to avoid rate limiting (free tier is limited)
       if (i < pageCount - 1) {
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
 
