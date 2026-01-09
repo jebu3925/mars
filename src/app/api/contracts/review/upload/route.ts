@@ -583,9 +583,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       text: extractedText,
-      filename: file.name,
-      size: file.size,
-      type: file.type,
+      filename: filename,
+      size: buffer.length,
     });
   } catch (error) {
     console.error('File upload error:', error);
