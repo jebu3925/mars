@@ -3,6 +3,8 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Sidebar, { SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH } from '@/components/Sidebar';
+import SmartDocumentsTab from '@/components/SmartDocumentsTab';
+import GlobalSearch from '@/components/GlobalSearch';
 
 // Types
 interface Contract {
@@ -1976,6 +1978,9 @@ export default function ContractsDashboard() {
                 <p className="text-gray-500 mt-1">Real-time Salesforce data • Click cards to filter</p>
               </div>
               <div className="flex items-center gap-6">
+                {/* Global Search */}
+                <GlobalSearch />
+
                 <div className="text-right">
                   <div className="text-sm text-gray-500 flex items-center gap-2 justify-end">
                     <span className="w-2 h-2 rounded-full bg-[#00A1E0] animate-pulse" />
@@ -2546,14 +2551,14 @@ export default function ContractsDashboard() {
             </motion.div>
           )}
 
-          {/* Documents Tab */}
+          {/* Documents Tab - Smart Document Management */}
           {activeTab === 'documents' && (
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               className="space-y-6"
             >
-              <DocumentsTab contracts={data.contracts} />
+              <SmartDocumentsTab contracts={data.contracts} />
             </motion.div>
           )}
 
