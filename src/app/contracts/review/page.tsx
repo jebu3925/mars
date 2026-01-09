@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import DOMPurify from 'dompurify';
 import Sidebar, { SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH } from '@/components/Sidebar';
+import { supabase } from '@/lib/supabase';
 
 interface Contract {
   id: string;
@@ -204,12 +205,21 @@ export default function ContractReviewPage() {
         setOriginalDocxBuffer(base64);
       }
 
-      const formData = new FormData();
-      formData.append('file', file);
+      // Upload to Supabase Storage first (bypasses Vercel 4.5MB limit)
+      const filename = `uploads/${Date.now()}-${file.name}`;
+      const { error: uploadError } = await supabase.storage
+        .from('data-files')
+        .upload(filename, file, { upsert: true });
 
+      if (uploadError) {
+        throw new Error(`Upload failed: ${uploadError.message}`);
+      }
+
+      // Now call API with storage path instead of file
       const response = await fetch('/api/contracts/review/upload', {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storagePath: filename, originalFilename: file.name }),
       });
 
       if (!response.ok) {
@@ -219,6 +229,9 @@ export default function ContractReviewPage() {
 
       const data = await response.json();
       setExtractedText(data.text);
+
+      // Clean up uploaded file from storage after processing
+      await supabase.storage.from('data-files').remove([filename]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to extract text from file');
       setUploadedFile(null);
@@ -375,12 +388,21 @@ export default function ContractReviewPage() {
     setCompareResult(null);
 
     try {
-      const formData = new FormData();
-      formData.append('file', file);
+      // Upload to Supabase Storage first (bypasses Vercel 4.5MB limit)
+      const filename = `uploads/${Date.now()}-${side}-${file.name}`;
+      const { error: uploadError } = await supabase.storage
+        .from('data-files')
+        .upload(filename, file, { upsert: true });
 
+      if (uploadError) {
+        throw new Error(`Upload failed: ${uploadError.message}`);
+      }
+
+      // Now call API with storage path instead of file
       const response = await fetch('/api/contracts/review/upload', {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storagePath: filename, originalFilename: file.name }),
       });
 
       if (!response.ok) {
@@ -390,6 +412,9 @@ export default function ContractReviewPage() {
 
       const data = await response.json();
       setText(data.text);
+
+      // Clean up uploaded file from storage after processing
+      await supabase.storage.from('data-files').remove([filename]);
     } catch (err) {
       setCompareError(err instanceof Error ? err.message : 'Failed to extract text from file');
       setFile(null);

@@ -458,18 +458,58 @@ async function extractPdfWithOCRSpace(buffer: Buffer): Promise<string> {
 
 export async function POST(request: NextRequest) {
   try {
-    const formData = await request.formData();
-    const file = formData.get('file') as File | null;
+    let filename: string;
+    let buffer: Buffer;
 
-    if (!file) {
-      return NextResponse.json(
-        { error: 'No file provided' },
-        { status: 400 }
-      );
+    // Check if request is JSON (Supabase storage path) or FormData (direct upload)
+    const contentType = request.headers.get('content-type') || '';
+
+    if (contentType.includes('application/json')) {
+      // Download from Supabase Storage (bypasses Vercel body limit)
+      const { storagePath, originalFilename } = await request.json();
+
+      if (!storagePath) {
+        return NextResponse.json(
+          { error: 'No storage path provided' },
+          { status: 400 }
+        );
+      }
+
+      const { getSupabaseAdmin } = await import('@/lib/supabase');
+      const supabaseAdmin = getSupabaseAdmin();
+
+      const { data, error } = await supabaseAdmin.storage
+        .from('data-files')
+        .download(storagePath);
+
+      if (error || !data) {
+        console.error('Supabase download error:', error);
+        return NextResponse.json(
+          { error: 'Failed to download file from storage' },
+          { status: 400 }
+        );
+      }
+
+      const arrayBuffer = await data.arrayBuffer();
+      buffer = Buffer.from(arrayBuffer);
+      filename = (originalFilename || storagePath).toLowerCase();
+
+      console.log(`Downloaded from Supabase: ${storagePath} (${buffer.length} bytes)`);
+    } else {
+      // Direct FormData upload (for smaller files)
+      const formData = await request.formData();
+      const file = formData.get('file') as File | null;
+
+      if (!file) {
+        return NextResponse.json(
+          { error: 'No file provided' },
+          { status: 400 }
+        );
+      }
+
+      filename = file.name.toLowerCase();
+      buffer = Buffer.from(await file.arrayBuffer());
     }
-
-    const filename = file.name.toLowerCase();
-    const buffer = Buffer.from(await file.arrayBuffer());
 
     // Validate PDF magic bytes
     if (filename.endsWith('.pdf')) {
