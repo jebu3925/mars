@@ -965,7 +965,7 @@ function ContractRow({
             : isEvenRow
               ? 'bg-[#151F2E] hover:bg-[#1a2740]'
               : 'bg-[#131B28] hover:bg-[#182437]'
-        } ${isEditing ? 'bg-[#1E293B] border-l-2 border-[#38BDF8]' : ''}
+        } ${isEditing ? 'bg-[#1E293B] border-l-2 border-[#38BDF8]' : contract.budgeted ? 'border-l-2 border-[#22C55E]/40' : ''}
         ${focusMode && !isCritical ? 'opacity-40' : ''}
         ${focusMode && isCritical ? 'ring-1 ring-[#F59E0B]/30 bg-[#F59E0B]/5' : ''}
         hover:shadow-[0_0_20px_rgba(56,189,248,0.05)]`}
@@ -990,6 +990,11 @@ function ContractRow({
                 {contract.isRenewal && (
                   <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-[#A78BFA]/15 text-[#A78BFA] flex-shrink-0">
                     R
+                  </span>
+                )}
+                {contract.budgeted && (
+                  <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-[#22C55E]/15 text-[#22C55E] flex-shrink-0" title="Budgeted">
+                    B
                   </span>
                 )}
               </div>
