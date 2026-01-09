@@ -316,11 +316,9 @@ function decodeXmlEntities(text: string): string {
     .replace(/&apos;/g, "'");
 }
 
-// OCR.space PRO API - Get FREE PRO key at https://ocr.space/ocrapi/freekey
-// PRO tier: 5MB file limit, 25K requests/month
-// Note: base64 encoding adds ~33% overhead, so max raw file is ~3.7MB
+// OCR.space API - Free tier: 1MB limit per request, 25K requests/month
 const OCR_SPACE_API_KEY = process.env.OCR_SPACE_API_KEY || '';
-const MAX_OCR_FILE_SIZE = 3.7 * 1024 * 1024; // ~3.7MB raw = ~5MB base64
+const MAX_PAGE_SIZE = 750 * 1024; // 750KB per page to stay safely under 1MB after base64
 
 // Extract text from PDF - tries native extraction first, falls back to OCR.space for scanned docs
 async function extractPdfText(buffer: Buffer): Promise<string> {
@@ -343,78 +341,102 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
     console.log('Native PDF extraction failed, trying OCR.space...', error);
   }
 
-  // Fall back to OCR.space for scanned documents (FREE with PRO key)
+  // Fall back to OCR.space - process page by page for large files
   return extractPdfWithOCRSpace(buffer);
 }
 
-// Use OCR.space PRO API for scanned PDFs (FREE - 5MB limit, 25K requests/month)
+// Use OCR.space API for scanned PDFs - processes page by page for large files
 async function extractPdfWithOCRSpace(buffer: Buffer): Promise<string> {
   // Check if API key is configured
   if (!OCR_SPACE_API_KEY) {
-    throw new Error('OCR not configured. Add OCR_SPACE_API_KEY to environment variables. Get a FREE PRO key at https://ocr.space/ocrapi/freekey');
+    throw new Error('OCR not configured. Add OCR_SPACE_API_KEY to environment variables. Get a free key at https://ocr.space/ocrapi/freekey');
   }
 
-  // Check file size (PRO limit is 5MB)
-  if (buffer.length > MAX_OCR_FILE_SIZE) {
-    const sizeMB = (buffer.length / (1024 * 1024)).toFixed(1);
-    throw new Error(`PDF is too large for OCR (${sizeMB}MB). Maximum size is 5MB. Try compressing the PDF or using a smaller file.`);
-  }
+  const { PDFDocument } = await import('pdf-lib');
 
   try {
-    const base64Pdf = buffer.toString('base64');
-    const fileSizeKB = Math.round(buffer.length / 1024);
-    const base64SizeKB = Math.round(base64Pdf.length / 1024);
-    console.log(`OCR.space PRO: Processing PDF (raw: ${fileSizeKB}KB, base64: ${base64SizeKB}KB)...`);
-    console.log(`OCR.space API key configured: ${OCR_SPACE_API_KEY ? 'Yes (starts with ' + OCR_SPACE_API_KEY.substring(0, 4) + '...)' : 'NO'}`);
+    // Load the PDF
+    const pdfDoc = await PDFDocument.load(buffer);
+    const pageCount = pdfDoc.getPageCount();
+    console.log(`OCR.space: Processing ${pageCount} pages...`);
 
-    // OCR.space accepts base64 PDF directly
-    const formData = new URLSearchParams();
-    formData.append('apikey', OCR_SPACE_API_KEY);
-    formData.append('base64Image', `data:application/pdf;base64,${base64Pdf}`);
-    formData.append('language', 'eng');
-    formData.append('isOverlayRequired', 'false');
-    formData.append('filetype', 'PDF');
-    formData.append('detectOrientation', 'true');
-    formData.append('scale', 'true');
-    formData.append('OCREngine', '2'); // Engine 2 is better for documents
+    const extractedTexts: string[] = [];
 
-    const response = await fetch('https://api.ocr.space/parse/image', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: formData.toString(),
-    });
+    // Process each page separately
+    for (let i = 0; i < pageCount; i++) {
+      console.log(`OCR.space: Processing page ${i + 1}/${pageCount}...`);
 
-    if (!response.ok) {
-      throw new Error(`OCR.space API error: ${response.status}`);
-    }
+      // Create a new PDF with just this page
+      const singlePagePdf = await PDFDocument.create();
+      const [copiedPage] = await singlePagePdf.copyPages(pdfDoc, [i]);
+      singlePagePdf.addPage(copiedPage);
 
-    const data = await response.json();
+      // Convert to bytes
+      const pageBytes = await singlePagePdf.save();
+      const base64Page = Buffer.from(pageBytes).toString('base64');
 
-    if (data.IsErroredOnProcessing) {
-      const errorMsg = data.ErrorMessage?.[0] || 'OCR processing failed';
-      console.error('OCR.space error response:', JSON.stringify(data, null, 2));
-      // Provide helpful message for common errors
-      if (errorMsg.toLowerCase().includes('size') || errorMsg.toLowerCase().includes('limit')) {
-        throw new Error(`File too large for OCR. Raw: ${fileSizeKB}KB, Base64: ${base64SizeKB}KB. PRO limit is 5MB base64. Original error: ${errorMsg}`);
+      // Check if single page is too large (shouldn't happen normally)
+      if (pageBytes.length > MAX_PAGE_SIZE) {
+        console.warn(`Page ${i + 1} is large (${Math.round(pageBytes.length / 1024)}KB), may fail`);
       }
-      throw new Error(errorMsg);
+
+      // OCR this page
+      const formData = new URLSearchParams();
+      formData.append('apikey', OCR_SPACE_API_KEY);
+      formData.append('base64Image', `data:application/pdf;base64,${base64Page}`);
+      formData.append('language', 'eng');
+      formData.append('isOverlayRequired', 'false');
+      formData.append('filetype', 'PDF');
+      formData.append('detectOrientation', 'true');
+      formData.append('scale', 'true');
+      formData.append('OCREngine', '2');
+
+      const response = await fetch('https://api.ocr.space/parse/image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: formData.toString(),
+      });
+
+      if (!response.ok) {
+        console.error(`OCR.space API error on page ${i + 1}: ${response.status}`);
+        extractedTexts.push(`[Page ${i + 1}: OCR failed]`);
+        continue;
+      }
+
+      const data = await response.json();
+
+      if (data.IsErroredOnProcessing) {
+        console.error(`OCR.space error on page ${i + 1}:`, data.ErrorMessage);
+        extractedTexts.push(`[Page ${i + 1}: ${data.ErrorMessage?.[0] || 'OCR failed'}]`);
+        continue;
+      }
+
+      // Get text from this page
+      const pageText = data.ParsedResults
+        ?.map((result: { ParsedText?: string }) => result.ParsedText || '')
+        .join('\n')
+        .trim() || '';
+
+      if (pageText) {
+        extractedTexts.push(pageText);
+      }
+
+      // Small delay to avoid rate limiting
+      if (i < pageCount - 1) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
     }
 
-    // Combine text from all pages
-    const extractedText = data.ParsedResults
-      ?.map((result: { ParsedText?: string }) => result.ParsedText || '')
-      .join('\n\n--- Page Break ---\n\n')
-      .trim() || '';
+    const fullText = extractedTexts.join('\n\n--- Page Break ---\n\n').trim();
+    console.log(`OCR.space complete: ${fullText.length} chars extracted from ${pageCount} pages`);
 
-    console.log(`OCR.space complete: ${extractedText.length} chars extracted`);
-
-    if (!extractedText) {
-      throw new Error('OCR could not extract text from the PDF. The document may be image-based with unreadable text.');
+    if (!fullText || fullText.includes('[Page') && !fullText.replace(/\[Page \d+:.*?\]/g, '').trim()) {
+      throw new Error('OCR could not extract text from the PDF. The document may have unreadable text or be corrupted.');
     }
 
-    return extractedText;
+    return fullText;
   } catch (error) {
     console.error('OCR.space error:', error);
     throw new Error(`PDF OCR failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
