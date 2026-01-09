@@ -316,24 +316,125 @@ function decodeXmlEntities(text: string): string {
     .replace(/&apos;/g, "'");
 }
 
-// Extract text from PDF using unpdf (Node.js compatible, no browser APIs required)
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+
+// Extract text from PDF - tries native extraction first, falls back to Vision OCR for scanned docs
 async function extractPdfText(buffer: Buffer): Promise<string> {
+  const uint8Array = new Uint8Array(buffer);
+
+  // First try native text extraction (fast, works for PDFs with text layer)
   try {
-    // unpdf works in both Node.js and browser without requiring DOMMatrix/canvas
     const { extractText } = await import('unpdf');
-
-    // Convert Buffer to Uint8Array for unpdf
-    const uint8Array = new Uint8Array(buffer);
-
-    // Extract text directly - unpdf handles document loading internally
     const result = await extractText(uint8Array, { mergePages: true });
 
-    console.log(`PDF extraction: ${result.totalPages} pages, ${result.text?.length || 0} chars`);
+    const text = result.text?.trim() || '';
+    console.log(`PDF native extraction: ${result.totalPages} pages, ${text.length} chars`);
 
-    return result.text || '';
+    // If we got meaningful text (more than just whitespace/artifacts), return it
+    if (text.length > 50) {
+      return text;
+    }
+    console.log('Native extraction returned minimal text, trying Vision OCR...');
   } catch (error) {
-    console.error('PDF parse error:', error);
-    throw new Error(`PDF parsing failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    console.log('Native PDF extraction failed, trying Vision OCR...', error);
+  }
+
+  // Fall back to Vision OCR for scanned documents
+  return extractPdfWithVisionOCR(uint8Array);
+}
+
+// Use Claude Vision via OpenRouter to OCR scanned PDFs
+async function extractPdfWithVisionOCR(uint8Array: Uint8Array): Promise<string> {
+  if (!OPENROUTER_API_KEY) {
+    throw new Error('OpenRouter API key not configured - required for scanned PDF OCR');
+  }
+
+  try {
+    const { renderPageAsImage, getDocumentProxy } = await import('unpdf');
+
+    const pdf = await getDocumentProxy(uint8Array);
+    const numPages = pdf.numPages;
+    console.log(`Vision OCR: Processing ${numPages} pages...`);
+
+    const extractedTexts: string[] = [];
+
+    // Process pages in batches to avoid rate limits
+    const batchSize = 5;
+    for (let i = 1; i <= numPages; i += batchSize) {
+      const batch = [];
+      for (let j = i; j < Math.min(i + batchSize, numPages + 1); j++) {
+        batch.push(j);
+      }
+
+      // Render pages to images and OCR them in parallel
+      const batchResults = await Promise.all(
+        batch.map(async (pageNum) => {
+          try {
+            // Render page as image (PNG)
+            const imageBuffer = await renderPageAsImage(pdf, pageNum, { scale: 2.0 });
+            const base64Image = Buffer.from(imageBuffer).toString('base64');
+
+            // Send to Claude Vision for OCR
+            const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+                'Content-Type': 'application/json',
+                'HTTP-Referer': 'https://mars-contracts.vercel.app',
+              },
+              body: JSON.stringify({
+                model: 'anthropic/claude-sonnet-4',
+                messages: [
+                  {
+                    role: 'user',
+                    content: [
+                      {
+                        type: 'image',
+                        source: {
+                          type: 'base64',
+                          media_type: 'image/png',
+                          data: base64Image,
+                        },
+                      },
+                      {
+                        type: 'text',
+                        text: 'Extract ALL text from this document image. Preserve the original formatting, paragraphs, and structure as much as possible. Output ONLY the extracted text, nothing else.',
+                      },
+                    ],
+                  },
+                ],
+                max_tokens: 4096,
+              }),
+            });
+
+            if (!response.ok) {
+              console.error(`Vision OCR failed for page ${pageNum}:`, await response.text());
+              return '';
+            }
+
+            const data = await response.json();
+            return data.choices?.[0]?.message?.content || '';
+          } catch (err) {
+            console.error(`Error processing page ${pageNum}:`, err);
+            return '';
+          }
+        })
+      );
+
+      extractedTexts.push(...batchResults);
+    }
+
+    const fullText = extractedTexts.filter(t => t).join('\n\n--- Page Break ---\n\n');
+    console.log(`Vision OCR complete: ${fullText.length} chars extracted`);
+
+    if (!fullText.trim()) {
+      throw new Error('Vision OCR could not extract text from the document');
+    }
+
+    return fullText;
+  } catch (error) {
+    console.error('Vision OCR error:', error);
+    throw new Error(`PDF OCR failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
