@@ -3,8 +3,9 @@
 import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Sidebar, { SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH } from '@/components/Sidebar';
+import SmartProjectsTab from '@/components/SmartProjectsTab';
 
-type TabType = 'timeline' | 'mcc' | 'punchlist' | 'docusign';
+type TabType = 'smart' | 'timeline' | 'mcc' | 'punchlist' | 'docusign';
 
 interface AsanaTask {
   gid: string;
@@ -94,14 +95,21 @@ function TabButton({ tab, activeTab, onClick, label, count, icon }: {
   );
 }
 
-// KPI Card
-function KPICard({ title, value, subtitle, color }: { title: string; value: React.ReactNode; subtitle: string; color: string }) {
+// KPI Card - Matching Contracts Pipeline design
+function KPICard({ title, value, subtitle, color, onClick }: { title: string; value: React.ReactNode; subtitle: string; color: string; onClick?: () => void }) {
   return (
-    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} whileHover={{ y: -2 }} className="relative overflow-hidden rounded-xl p-4 bg-[#151F2E] border border-white/[0.04]">
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      whileHover={{ y: -2, boxShadow: '0 12px 32px rgba(0,0,0,0.4), 0 0 20px rgba(225,98,89,0.1)' }}
+      transition={{ duration: 0.2, ease: 'easeOut' }}
+      onClick={onClick}
+      className={`relative overflow-hidden rounded-xl p-5 bg-[#151F2E] border border-white/[0.06] shadow-[0_8px_24px_rgba(0,0,0,0.35)] ${onClick ? 'cursor-pointer' : ''}`}
+    >
       <div className="absolute left-0 top-0 bottom-0 w-1 rounded-l-xl" style={{ background: color }} />
-      <div className="text-[10px] font-semibold text-[#64748B] uppercase tracking-wider mb-1">{title}</div>
-      <div className="text-[24px] font-semibold text-[#EAF2FF]">{value}</div>
-      <div className="text-[11px] text-[#64748B]">{subtitle}</div>
+      <div className="text-[11px] font-medium text-[#64748B] mb-2">{title}</div>
+      <div className="text-[28px] font-semibold text-white">{value}</div>
+      <div className="text-[12px] text-[#8FA3BF] mt-1">{subtitle}</div>
     </motion.div>
   );
 }
@@ -284,7 +292,7 @@ function TimelineTab({ data, loading }: { data: ProjectData | null; loading: boo
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-4 mb-6 p-4 rounded-xl bg-[#111827] border border-white/[0.04]">
+      <div className="flex items-center gap-4 mb-6 p-4 rounded-xl bg-[#151F2E] border border-white/[0.06] shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-semibold text-[#475569] uppercase">View:</span>
           <button onClick={() => setViewMode('calendar')} className={`text-[11px] px-3 py-1.5 rounded-lg flex items-center gap-1.5 ${viewMode === 'calendar' ? 'bg-[#E16259]/20 text-[#E16259] border border-[#E16259]/30' : 'bg-white/5 text-[#64748B] hover:text-white'}`}>
@@ -328,9 +336,9 @@ function TimelineTab({ data, loading }: { data: ProjectData | null; loading: boo
 
       {/* Calendar View */}
       {viewMode === 'calendar' && (
-        <div className="rounded-xl bg-[#111827] border border-white/[0.04] overflow-hidden">
+        <div className="rounded-xl bg-[#151F2E] border border-white/[0.06] shadow-[0_8px_24px_rgba(0,0,0,0.35)] overflow-hidden">
           {/* Calendar Header */}
-          <div className="px-5 py-3 bg-[#0B1220] border-b border-white/[0.04] flex items-center justify-between">
+          <div className="px-5 py-3 bg-[#0F1722] border-b border-white/[0.06] flex items-center justify-between">
             <button onClick={() => navigateMonth('prev')} className="p-1.5 rounded-lg hover:bg-white/5 text-[#8FA3BF] hover:text-white transition-colors">
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
             </button>
@@ -343,7 +351,7 @@ function TimelineTab({ data, loading }: { data: ProjectData | null; loading: boo
           </div>
 
           {/* Weekday Headers */}
-          <div className="grid grid-cols-7 border-b border-white/[0.04]">
+          <div className="grid grid-cols-7 border-b border-white/[0.06]">
             {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
               <div key={day} className="px-2 py-2 text-center text-[10px] font-semibold text-[#475569] uppercase">
                 {day}
@@ -355,7 +363,7 @@ function TimelineTab({ data, loading }: { data: ProjectData | null; loading: boo
           <div className="grid grid-cols-7">
             {calendarData.days.map((day, idx) => {
               if (!day) {
-                return <div key={`empty-${idx}`} className="min-h-[100px] border-r border-b border-white/[0.03] bg-[#0B1220]/50" />;
+                return <div key={`empty-${idx}`} className="min-h-[100px] border-r border-b border-white/[0.04] bg-[#0F1722]/60" />;
               }
 
               const dateStr = day.toISOString().split('T')[0];
@@ -364,7 +372,7 @@ function TimelineTab({ data, loading }: { data: ProjectData | null; loading: boo
               const isPast = day < new Date(new Date().setHours(0, 0, 0, 0));
 
               return (
-                <div key={dateStr} className={`min-h-[100px] border-r border-b border-white/[0.03] p-1.5 ${isToday ? 'bg-[#E16259]/5' : isPast ? 'bg-[#0B1220]/30' : 'bg-[#111827]'}`}>
+                <div key={dateStr} className={`min-h-[100px] border-r border-b border-white/[0.04] p-1.5 ${isToday ? 'bg-[#E16259]/5' : isPast ? 'bg-[#0F1722]/30' : 'bg-[#151F2E]'}`}>
                   <div className={`text-[11px] font-medium mb-1 ${isToday ? 'text-[#E16259]' : isPast ? 'text-[#475569]' : 'text-[#8FA3BF]'}`}>
                     {day.getDate()}
                   </div>
@@ -403,8 +411,8 @@ function TimelineTab({ data, loading }: { data: ProjectData | null; loading: boo
           ) : (
             <div className="space-y-6">
               {Object.entries(groupedByDate).map(([week, tasks]) => (
-                <div key={week} className="rounded-xl bg-[#111827] border border-white/[0.04] overflow-hidden">
-                  <div className="px-5 py-3 bg-[#0B1220] border-b border-white/[0.04] flex items-center justify-between">
+                <div key={week} className="rounded-xl bg-[#151F2E] border border-white/[0.06] shadow-[0_8px_24px_rgba(0,0,0,0.35)] overflow-hidden">
+                  <div className="px-5 py-3 bg-[#0F1722] border-b border-white/[0.06] flex items-center justify-between">
                     <span className="font-semibold text-[#EAF2FF] text-[13px]">Week of {week}</span>
                     <span className="text-[10px] text-[#64748B]">{tasks.length} tasks</span>
                   </div>
@@ -418,7 +426,7 @@ function TimelineTab({ data, loading }: { data: ProjectData | null; loading: boo
                                           taskStatus === 'placeholder' ? ASANA_COLORS.placeholder : null;
 
                       return (
-                        <div key={task.gid} className={`px-5 py-3 flex items-center gap-4 ${idx % 2 === 0 ? 'bg-[#131B28]' : 'bg-[#111827]'} hover:bg-[#1a2740] transition-colors`}>
+                        <div key={task.gid} className={`px-5 py-3 flex items-center gap-4 ${idx % 2 === 0 ? 'bg-[#0F1722]' : 'bg-[#151F2E]'} hover:bg-[#1E293B] transition-colors`}>
                           {/* Status Indicator */}
                           {statusColor && (
                             <div className="w-1 h-8 rounded-full" style={{ backgroundColor: statusColor }} />
@@ -542,7 +550,7 @@ function MCCStatusTab({ data, loading }: { data: ProjectData | null; loading: bo
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-4 mb-6 p-4 rounded-xl bg-[#111827] border border-white/[0.04]">
+      <div className="flex items-center gap-4 mb-6 p-4 rounded-xl bg-[#151F2E] border border-white/[0.06] shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-semibold text-[#475569] uppercase">Region:</span>
           <select value={regionFilter} onChange={e => setRegionFilter(e.target.value)} className="text-[11px] px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white">
@@ -567,8 +575,8 @@ function MCCStatusTab({ data, loading }: { data: ProjectData | null; loading: bo
       </div>
 
       {/* MCC Table */}
-      <div className="rounded-xl bg-[#111827] border border-white/[0.04] overflow-hidden">
-        <div className="grid gap-4 px-5 py-2.5 text-[10px] font-semibold text-[#475569] uppercase tracking-wider border-b border-white/[0.04] bg-[#0B1220]" style={{ gridTemplateColumns: '100px 2fr 100px 100px 120px 100px' }}>
+      <div className="rounded-xl bg-[#151F2E] border border-white/[0.06] shadow-[0_8px_24px_rgba(0,0,0,0.35)] overflow-hidden">
+        <div className="grid gap-4 px-5 py-2.5 text-[10px] font-semibold text-[#475569] uppercase tracking-wider border-b border-white/[0.06] bg-[#0F1722]" style={{ gridTemplateColumns: '100px 2fr 100px 100px 120px 100px' }}>
           <div>Dates</div>
           <div>MCC Name</div>
           <div>Region</div>
@@ -587,7 +595,7 @@ function MCCStatusTab({ data, loading }: { data: ProjectData | null; loading: bo
             const dueSoon = isDueSoon(task.dueOn);
 
             return (
-              <div key={task.gid} className={`grid gap-4 px-5 py-3 items-center border-b border-white/[0.03] ${idx % 2 === 0 ? 'bg-[#131B28]' : 'bg-[#111827]'} hover:bg-[#1a2740] transition-colors`} style={{ gridTemplateColumns: '100px 2fr 100px 100px 120px 100px' }}>
+              <div key={task.gid} className={`grid gap-4 px-5 py-3 items-center border-b border-white/[0.04] ${idx % 2 === 0 ? 'bg-[#0F1722]' : 'bg-[#151F2E]'} hover:bg-[#1E293B] transition-colors`} style={{ gridTemplateColumns: '100px 2fr 100px 100px 120px 100px' }}>
                 {/* Dates */}
                 <div>
                   <div className={`text-[12px] font-medium ${overdue ? 'text-[#EF4444]' : dueSoon ? 'text-[#F59E0B]' : 'text-[#EAF2FF]'}`}>
@@ -650,7 +658,7 @@ function PunchListTab({ data, loading }: { data: ProjectData | null; loading: bo
   return (
     <div>
       {/* Progress Overview */}
-      <div className="mb-6 p-6 rounded-xl bg-[#111827] border border-white/[0.04]">
+      <div className="mb-6 p-6 rounded-xl bg-[#151F2E] border border-white/[0.06] shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
         <div className="flex items-center justify-between mb-3">
           <div>
             <h3 className="text-[14px] font-semibold text-[#EAF2FF]">Punch List Progress</h3>
@@ -678,14 +686,14 @@ function PunchListTab({ data, loading }: { data: ProjectData | null; loading: bo
 
       {/* Grouped Tasks */}
       {Object.entries(groupedTasks).map(([section, tasks]) => (
-        <div key={section} className="mb-4 rounded-xl bg-[#111827] border border-white/[0.04] overflow-hidden">
-          <div className="px-5 py-3 bg-[#0B1220] border-b border-white/[0.04] flex items-center justify-between">
+        <div key={section} className="mb-4 rounded-xl bg-[#151F2E] border border-white/[0.06] shadow-[0_8px_24px_rgba(0,0,0,0.35)] overflow-hidden">
+          <div className="px-5 py-3 bg-[#0F1722] border-b border-white/[0.06] flex items-center justify-between">
             <span className="font-semibold text-[#EAF2FF] text-[13px]">{section}</span>
             <span className="text-[10px] text-[#64748B]">{tasks.filter(t => t.completed).length}/{tasks.length}</span>
           </div>
           <div className="divide-y divide-white/[0.03]">
             {tasks.map((task, idx) => (
-              <div key={task.gid} className={`px-5 py-3 flex items-center gap-4 ${idx % 2 === 0 ? 'bg-[#131B28]' : 'bg-[#111827]'}`}>
+              <div key={task.gid} className={`px-5 py-3 flex items-center gap-4 ${idx % 2 === 0 ? 'bg-[#0F1722]' : 'bg-[#151F2E]'}`}>
                 <div className={`w-4 h-4 rounded border-2 flex items-center justify-center ${task.completed ? 'bg-[#22C55E] border-[#22C55E]' : 'border-[#475569]'}`}>
                   {task.completed && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
                 </div>
@@ -820,8 +828,8 @@ function DocuSignTab({ data, loading }: { data: DocuSignData | null; loading: bo
       </div>
 
       {/* Envelope List */}
-      <div className="rounded-xl bg-[#111827] border border-white/[0.04] overflow-hidden">
-        <div className="grid gap-4 px-5 py-2.5 text-[10px] font-semibold text-[#475569] uppercase tracking-wider border-b border-white/[0.04] bg-[#0B1220]" style={{ gridTemplateColumns: '2fr 90px 100px 100px 80px 150px' }}>
+      <div className="rounded-xl bg-[#151F2E] border border-white/[0.06] shadow-[0_8px_24px_rgba(0,0,0,0.35)] overflow-hidden">
+        <div className="grid gap-4 px-5 py-2.5 text-[10px] font-semibold text-[#475569] uppercase tracking-wider border-b border-white/[0.06] bg-[#0F1722]" style={{ gridTemplateColumns: '2fr 90px 100px 100px 80px 150px' }}>
           <div>Document</div>
           <div>Status</div>
           <div>Sent</div>
@@ -835,7 +843,7 @@ function DocuSignTab({ data, loading }: { data: DocuSignData | null; loading: bo
             const label = getStatusLabel(envelope.status);
 
             return (
-              <div key={envelope.envelopeId} className={`grid gap-4 px-5 py-3 items-center border-b border-white/[0.03] ${idx % 2 === 0 ? 'bg-[#131B28]' : 'bg-[#111827]'} hover:bg-[#1a2740] transition-colors`} style={{ gridTemplateColumns: '2fr 90px 100px 100px 80px 150px' }}>
+              <div key={envelope.envelopeId} className={`grid gap-4 px-5 py-3 items-center border-b border-white/[0.04] ${idx % 2 === 0 ? 'bg-[#0F1722]' : 'bg-[#151F2E]'} hover:bg-[#1E293B] transition-colors`} style={{ gridTemplateColumns: '2fr 90px 100px 100px 80px 150px' }}>
                 <div className="text-[13px] text-[#EAF2FF] truncate">{envelope.emailSubject}</div>
                 <div>
                   <span className="text-[10px] px-2 py-1 rounded font-medium" style={{ backgroundColor: `${color}20`, color }}>{label}</span>
@@ -883,7 +891,7 @@ function LoadingState() {
 }
 
 export default function PMDashboard() {
-  const [activeTab, setActiveTab] = useState<TabType>('timeline');
+  const [activeTab, setActiveTab] = useState<TabType>('smart');
   const [timelineData, setTimelineData] = useState<ProjectData | null>(null);
   const [mccData, setMccData] = useState<ProjectData | null>(null);
   const [punchlistData, setPunchlistData] = useState<ProjectData | null>(null);
@@ -946,22 +954,22 @@ export default function PMDashboard() {
   const isLoading = Object.values(loading).some(l => l);
 
   return (
-    <div className="min-h-screen bg-[#0B1220]">
+    <div className="min-h-screen bg-[#0F1722]">
       <Sidebar isCollapsed={sidebarCollapsed} onCollapsedChange={setSidebarCollapsed} />
-      <div className="fixed inset-0 bg-gradient-to-b from-[#0F1722] via-[#0B1220] to-[#0B1220]" />
+      <div className="fixed inset-0 bg-[#0F1722]" />
 
       <motion.div
         className="relative z-10 text-white"
         animate={{ marginLeft: sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_WIDTH }}
         transition={{ duration: 0.2, ease: 'easeOut' }}
       >
-        {/* Header */}
-        <header className="border-b border-white/[0.04] bg-[#0B1220]/90 backdrop-blur-xl sticky top-0 z-50">
-          <div className="max-w-[1600px] mx-auto px-8 py-4">
+        {/* Header - Solid background, no blur */}
+        <header className="border-b border-white/[0.06] bg-[#0F1722] shadow-[0_4px_12px_rgba(0,0,0,0.3)] sticky top-0 z-50">
+          <div className="max-w-[1600px] mx-auto px-8 py-5">
             <div className="flex items-center justify-between">
               <div>
-                <h1 className="text-xl font-semibold text-[#EAF2FF]">Project Management</h1>
-                <p className="text-[11px] text-[#475569] mt-0.5">Asana + DocuSign Integration</p>
+                <h1 className="text-[20px] font-semibold text-white">Project Management</h1>
+                <p className="text-[12px] text-[#8FA3BF] mt-1">Asana + DocuSign Integration</p>
               </div>
               <div className="flex items-center gap-4">
                 <div className="text-right">
@@ -980,7 +988,8 @@ export default function PMDashboard() {
 
             {/* Tabs */}
             <div className="flex items-center gap-2 mt-4">
-              <TabButton tab="timeline" activeTab={activeTab} onClick={setActiveTab} label="Master Timeline" count={timelineData?.stats.incomplete} icon={<svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>} />
+              <TabButton tab="smart" activeTab={activeTab} onClick={setActiveTab} label="Smart View" count={timelineData?.stats.incomplete} icon={<svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>} />
+              <TabButton tab="timeline" activeTab={activeTab} onClick={setActiveTab} label="Calendar" count={timelineData?.stats.incomplete} icon={<svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>} />
               <TabButton tab="mcc" activeTab={activeTab} onClick={setActiveTab} label="MCC Status" count={mccData?.stats.incomplete} icon={<svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>} />
               <TabButton tab="punchlist" activeTab={activeTab} onClick={setActiveTab} label="Punch List" count={punchlistData?.stats.incomplete} icon={<svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" /></svg>} />
               <TabButton tab="docusign" activeTab={activeTab} onClick={setActiveTab} label="DocuSign" count={docusignData?.stats.pending} icon={<svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>} />
@@ -991,6 +1000,7 @@ export default function PMDashboard() {
         <main className="max-w-[1600px] mx-auto px-8 py-6">
           <AnimatePresence mode="wait">
             <motion.div key={activeTab} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.15 }}>
+              {activeTab === 'smart' && <SmartProjectsTab data={timelineData} loading={loading.timeline} />}
               {activeTab === 'timeline' && <TimelineTab data={timelineData} loading={loading.timeline} />}
               {activeTab === 'mcc' && <MCCStatusTab data={mccData} loading={loading.mcc} />}
               {activeTab === 'punchlist' && <PunchListTab data={punchlistData} loading={loading.punchlist} />}

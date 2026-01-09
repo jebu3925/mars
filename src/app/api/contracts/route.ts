@@ -1,15 +1,71 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getContracts, getSupabaseAdmin, Contract } from '@/lib/supabase';
+import { z } from 'zod';
+import { CONTRACT_STATUSES } from '@/lib/validations';
+import { requireAuth, isAuthError } from '@/lib/apiAuth';
 
-// Valid contract statuses
-const VALID_STATUSES = [
-  'Discussions Not Started',
-  'Initial Agreement Development',
-  'Review & Redlines',
-  'Approval & Signature',
-  'Agreement Submission',
-  'PO Received',
-];
+// Schema for single field update (legacy format)
+const contractFieldUpdateSchema = z.object({
+  contractId: z.string().optional(),
+  salesforceId: z.string().optional(),
+  field: z.enum(['status', 'value', 'contractDate', 'awardDate', 'closeDate', 'probability', 'budgeted', 'manualCloseProbability', 'salesRep', 'redlines']),
+  value: z.unknown(),
+}).refine(data => data.contractId || data.salesforceId, {
+  message: 'Either contractId or salesforceId is required',
+});
+
+// Validation for field values based on field type
+function validateFieldValue(field: string, value: unknown): { valid: boolean; error?: string; parsed?: unknown } {
+  switch (field) {
+    case 'status':
+      if (!CONTRACT_STATUSES.includes(value as typeof CONTRACT_STATUSES[number])) {
+        return { valid: false, error: `Invalid status. Valid: ${CONTRACT_STATUSES.join(', ')}` };
+      }
+      return { valid: true, parsed: value };
+
+    case 'value':
+    case 'probability':
+    case 'manualCloseProbability':
+      const num = typeof value === 'string' ? parseFloat(value) : value;
+      if (typeof num !== 'number' || isNaN(num)) {
+        return { valid: false, error: `${field} must be a number` };
+      }
+      if (field === 'value' && num < 0) {
+        return { valid: false, error: 'Value must be non-negative' };
+      }
+      if ((field === 'probability' || field === 'manualCloseProbability') && (num < 0 || num > 100)) {
+        return { valid: false, error: `${field} must be between 0 and 100` };
+      }
+      return { valid: true, parsed: num };
+
+    case 'contractDate':
+    case 'awardDate':
+    case 'closeDate':
+      if (value === null || value === '') {
+        return { valid: true, parsed: null };
+      }
+      if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        return { valid: false, error: 'Date must be in YYYY-MM-DD format' };
+      }
+      return { valid: true, parsed: value };
+
+    case 'budgeted':
+      if (typeof value !== 'boolean') {
+        return { valid: false, error: 'budgeted must be a boolean' };
+      }
+      return { valid: true, parsed: value };
+
+    case 'salesRep':
+    case 'redlines':
+      if (value !== null && typeof value !== 'string') {
+        return { valid: false, error: `${field} must be a string` };
+      }
+      return { valid: true, parsed: value };
+
+    default:
+      return { valid: false, error: `Unknown field: ${field}` };
+  }
+}
 
 interface DashboardContract {
   id: string;
@@ -136,64 +192,57 @@ export async function GET() {
 
 /**
  * Update a contract in Supabase
- * Supports updating: status, value, contractDate, awardDate
+ * Supports updating: status, value, contractDate, awardDate, closeDate, probability, budgeted, etc.
  */
 export async function PATCH(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { contractId, salesforceId, field, value } = body;
+    // Verify user is authenticated
+    const authResult = await requireAuth(request);
+    if (isAuthError(authResult)) {
+      return authResult;
+    }
 
-    // Need either contractId or salesforceId
+    const body = await request.json();
+
+    // Validate request body with Zod
+    const parseResult = contractFieldUpdateSchema.safeParse(body);
+    if (!parseResult.success) {
+      return NextResponse.json({
+        error: 'Validation failed',
+        details: parseResult.error.issues.map(e => `${e.path.join('.')}: ${e.message}`),
+      }, { status: 400 });
+    }
+
+    const { contractId, salesforceId, field, value } = parseResult.data;
     const id = contractId || salesforceId;
-    if (!id || !field) {
-      return NextResponse.json({ error: 'Missing contractId/salesforceId or field' }, { status: 400 });
+
+    // Validate the field value
+    const fieldValidation = validateFieldValue(field, value);
+    if (!fieldValidation.valid) {
+      return NextResponse.json({ error: fieldValidation.error }, { status: 400 });
     }
 
     const admin = getSupabaseAdmin();
 
-    // Build the update object based on field
-    let updateData: Record<string, any> = {
-      updated_at: new Date().toISOString(),
+    // Map field names to database column names
+    const fieldToColumn: Record<string, string> = {
+      status: 'status',
+      value: 'value',
+      contractDate: 'contract_date',
+      awardDate: 'award_date',
+      closeDate: 'close_date',
+      probability: 'probability',
+      budgeted: 'budgeted',
+      manualCloseProbability: 'manual_close_probability',
+      salesRep: 'sales_rep',
+      redlines: 'redlines',
     };
 
-    switch (field) {
-      case 'status':
-        if (!VALID_STATUSES.includes(value)) {
-          return NextResponse.json({
-            error: 'Invalid status',
-            validStatuses: VALID_STATUSES
-          }, { status: 400 });
-        }
-        updateData.status = value;
-        break;
-
-      case 'value':
-        const numValue = parseFloat(value);
-        if (isNaN(numValue)) {
-          return NextResponse.json({ error: 'Invalid value - must be a number' }, { status: 400 });
-        }
-        updateData.value = numValue;
-        break;
-
-      case 'contractDate':
-        const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-        if (!dateRegex.test(value)) {
-          return NextResponse.json({ error: 'Invalid date format. Use YYYY-MM-DD' }, { status: 400 });
-        }
-        updateData.contract_date = value;
-        break;
-
-      case 'awardDate':
-        const awardDateRegex = /^\d{4}-\d{2}-\d{2}$/;
-        if (!awardDateRegex.test(value)) {
-          return NextResponse.json({ error: 'Invalid date format. Use YYYY-MM-DD' }, { status: 400 });
-        }
-        updateData.award_date = value;
-        break;
-
-      default:
-        return NextResponse.json({ error: `Unknown field: ${field}` }, { status: 400 });
-    }
+    const columnName = fieldToColumn[field];
+    const updateData: Record<string, unknown> = {
+      [columnName]: fieldValidation.parsed,
+      updated_at: new Date().toISOString(),
+    };
 
     // Update using salesforce_id as the primary identifier
     const { error } = await admin
@@ -213,7 +262,7 @@ export async function PATCH(request: NextRequest) {
       success: true,
       contractId: id,
       field,
-      value,
+      value: fieldValidation.parsed,
       updatedAt: new Date().toISOString(),
     });
 
