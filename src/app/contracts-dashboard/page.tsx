@@ -1718,8 +1718,8 @@ export default function ContractsDashboard() {
         });
         return updated;
       });
-      // Refresh data only if some succeeded
-      fetchData();
+      // Refresh data only if some succeeded - MUST await to ensure UI updates
+      await fetchData();
     }
 
     // Show appropriate message
