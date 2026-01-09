@@ -343,62 +343,112 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
   return extractPdfWithVisionOCR(uint8Array);
 }
 
-// Use Claude to directly read PDF (Claude supports PDF files natively)
+// Use Claude to directly read PDF via Anthropic API (native PDF support)
 async function extractPdfWithVisionOCR(uint8Array: Uint8Array): Promise<string> {
-  if (!OPENROUTER_API_KEY) {
-    throw new Error('OpenRouter API key not configured - required for scanned PDF OCR');
+  const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
+
+  if (!ANTHROPIC_API_KEY && !OPENROUTER_API_KEY) {
+    throw new Error('No API key configured for PDF OCR (need ANTHROPIC_API_KEY or OPENROUTER_API_KEY)');
   }
 
   try {
-    // Convert PDF to base64 and send directly to Claude (supports PDFs natively)
     const base64Pdf = Buffer.from(uint8Array).toString('base64');
-    console.log(`Vision OCR: Sending PDF directly to Claude (${Math.round(base64Pdf.length / 1024)}KB)...`);
+    console.log(`Vision OCR: Sending PDF to Claude (${Math.round(base64Pdf.length / 1024)}KB)...`);
 
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://mars-contracts.vercel.app',
-      },
-      body: JSON.stringify({
-        model: 'anthropic/claude-sonnet-4',
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'document',
-                source: {
-                  type: 'base64',
-                  media_type: 'application/pdf',
-                  data: base64Pdf,
+    let extractedText = '';
+
+    // Try Anthropic API first (native PDF support)
+    if (ANTHROPIC_API_KEY) {
+      console.log('Using Anthropic API directly...');
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': ANTHROPIC_API_KEY,
+          'content-type': 'application/json',
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 16000,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'document',
+                  source: {
+                    type: 'base64',
+                    media_type: 'application/pdf',
+                    data: base64Pdf,
+                  },
                 },
-              },
-              {
-                type: 'text',
-                text: 'Extract ALL text from this PDF document. Preserve the original formatting, paragraphs, numbering, and structure as much as possible. Output ONLY the extracted text content, nothing else. Do not add any commentary or descriptions.',
-              },
-            ],
-          },
-        ],
-        max_tokens: 16000,
-      }),
-    });
+                {
+                  type: 'text',
+                  text: 'Extract ALL text from this PDF document verbatim. Include every page. Preserve formatting, paragraphs, and numbering. Output ONLY the raw text - no commentary, no descriptions, no "here is the text" preambles. Start directly with the document content.',
+                },
+              ],
+            },
+          ],
+        }),
+      });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Vision OCR API error:', errorText);
-      throw new Error(`API error: ${response.status}`);
+      if (response.ok) {
+        const data = await response.json();
+        extractedText = data.content?.[0]?.text || '';
+      } else {
+        console.error('Anthropic API error:', await response.text());
+      }
     }
 
-    const data = await response.json();
-    const extractedText = data.choices?.[0]?.message?.content || '';
+    // Fallback to OpenRouter if Anthropic failed or unavailable
+    if (!extractedText && OPENROUTER_API_KEY) {
+      console.log('Using OpenRouter API...');
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://mars-contracts.vercel.app',
+        },
+        body: JSON.stringify({
+          model: 'anthropic/claude-sonnet-4',
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'file',
+                  file: {
+                    filename: 'document.pdf',
+                    file_data: `data:application/pdf;base64,${base64Pdf}`,
+                  },
+                },
+                {
+                  type: 'text',
+                  text: 'Extract ALL text from this PDF document verbatim. Include every page. Preserve formatting, paragraphs, and numbering. Output ONLY the raw text - no commentary, no descriptions, no preambles. Start directly with the document content.',
+                },
+              ],
+            },
+          ],
+          max_tokens: 16000,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        extractedText = data.choices?.[0]?.message?.content || '';
+      } else {
+        console.error('OpenRouter API error:', await response.text());
+      }
+    }
+
+    // Clean up any AI commentary that might have slipped through
+    extractedText = cleanAICommentary(extractedText);
 
     console.log(`Vision OCR complete: ${extractedText.length} chars extracted`);
 
     if (!extractedText.trim()) {
-      throw new Error('Vision OCR could not extract text from the document');
+      throw new Error('Could not extract text from the PDF');
     }
 
     return extractedText;
@@ -406,6 +456,27 @@ async function extractPdfWithVisionOCR(uint8Array: Uint8Array): Promise<string> 
     console.error('Vision OCR error:', error);
     throw new Error(`PDF OCR failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
+}
+
+// Remove any AI commentary/preamble from extracted text
+function cleanAICommentary(text: string): string {
+  // Common AI preambles to remove
+  const preamblePatterns = [
+    /^I don't see any PDF[^]*?(?=\d|[A-Z]{2,})/i,
+    /^I cannot see[^]*?(?=\d|[A-Z]{2,})/i,
+    /^Here is the (?:extracted )?text[^]*?:\s*/i,
+    /^The (?:document|PDF) (?:contains|reads)[^]*?:\s*/i,
+    /^Once you provide[^]*?(?=\d|[A-Z]{2,})/i,
+    /^To extract text[^]*?(?=\d|[A-Z]{2,})/i,
+    /^(?:1\.|2\.)\s*(?:Upload|Share)[^]*?(?=\d+\s+of\s+\d+|[A-Z]{3,})/i,
+  ];
+
+  let cleaned = text;
+  for (const pattern of preamblePatterns) {
+    cleaned = cleaned.replace(pattern, '');
+  }
+
+  return cleaned.trim();
 }
 
 export async function POST(request: NextRequest) {
