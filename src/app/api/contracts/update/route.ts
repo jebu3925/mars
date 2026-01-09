@@ -45,13 +45,15 @@ export async function POST(request: NextRequest) {
 
     const admin = getSupabaseAdmin();
 
-    const { error } = await admin
+    // Use .select() to get the updated row and verify it exists
+    const { data, error } = await admin
       .from('contracts')
       .update({
         status: newStatus,
         updated_at: new Date().toISOString(),
       })
-      .eq('salesforce_id', salesforceId);
+      .eq('salesforce_id', salesforceId)
+      .select('salesforce_id, status');
 
     if (error) {
       console.error('[UPDATE] Supabase error:', error);
@@ -61,7 +63,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(`[UPDATE] Successfully updated ${salesforceId}`);
+    // Check if any rows were actually updated
+    if (!data || data.length === 0) {
+      console.error(`[UPDATE] No contract found with salesforce_id: ${salesforceId}`);
+      return NextResponse.json(
+        { error: `Contract not found with ID: ${salesforceId}` },
+        { status: 404 }
+      );
+    }
+
+    console.log(`[UPDATE] Successfully updated ${salesforceId} to ${data[0].status}`);
 
     return NextResponse.json({
       success: true,
