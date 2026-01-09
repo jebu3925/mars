@@ -320,16 +320,17 @@ function decodeXmlEntities(text: string): string {
 async function extractPdfText(buffer: Buffer): Promise<string> {
   try {
     // unpdf works in both Node.js and browser without requiring DOMMatrix/canvas
-    const { extractText, getDocumentProxy } = await import('unpdf');
+    const { extractText } = await import('unpdf');
 
     // Convert Buffer to Uint8Array for unpdf
     const uint8Array = new Uint8Array(buffer);
 
-    // Get document proxy and extract text
-    const pdf = await getDocumentProxy(uint8Array);
-    const { text } = await extractText(pdf, { mergePages: true });
+    // Extract text directly - unpdf handles document loading internally
+    const result = await extractText(uint8Array, { mergePages: true });
 
-    return text || '';
+    console.log(`PDF extraction: ${result.totalPages} pages, ${result.text?.length || 0} chars`);
+
+    return result.text || '';
   } catch (error) {
     console.error('PDF parse error:', error);
     throw new Error(`PDF parsing failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
