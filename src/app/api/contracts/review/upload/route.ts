@@ -343,95 +343,65 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
   return extractPdfWithVisionOCR(uint8Array);
 }
 
-// Use Claude Vision via OpenRouter to OCR scanned PDFs
+// Use Claude to directly read PDF (Claude supports PDF files natively)
 async function extractPdfWithVisionOCR(uint8Array: Uint8Array): Promise<string> {
   if (!OPENROUTER_API_KEY) {
     throw new Error('OpenRouter API key not configured - required for scanned PDF OCR');
   }
 
   try {
-    const { renderPageAsImage, getDocumentProxy } = await import('unpdf');
+    // Convert PDF to base64 and send directly to Claude (supports PDFs natively)
+    const base64Pdf = Buffer.from(uint8Array).toString('base64');
+    console.log(`Vision OCR: Sending PDF directly to Claude (${Math.round(base64Pdf.length / 1024)}KB)...`);
 
-    const pdf = await getDocumentProxy(uint8Array);
-    const numPages = pdf.numPages;
-    console.log(`Vision OCR: Processing ${numPages} pages...`);
-
-    const extractedTexts: string[] = [];
-
-    // Process pages in batches to avoid rate limits
-    const batchSize = 5;
-    for (let i = 1; i <= numPages; i += batchSize) {
-      const batch = [];
-      for (let j = i; j < Math.min(i + batchSize, numPages + 1); j++) {
-        batch.push(j);
-      }
-
-      // Render pages to images and OCR them in parallel
-      const batchResults = await Promise.all(
-        batch.map(async (pageNum) => {
-          try {
-            // Render page as image (PNG)
-            const imageBuffer = await renderPageAsImage(pdf, pageNum, { scale: 2.0 });
-            const base64Image = Buffer.from(imageBuffer).toString('base64');
-
-            // Send to Claude Vision for OCR
-            const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-                'Content-Type': 'application/json',
-                'HTTP-Referer': 'https://mars-contracts.vercel.app',
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://mars-contracts.vercel.app',
+      },
+      body: JSON.stringify({
+        model: 'anthropic/claude-sonnet-4',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'document',
+                source: {
+                  type: 'base64',
+                  media_type: 'application/pdf',
+                  data: base64Pdf,
+                },
               },
-              body: JSON.stringify({
-                model: 'anthropic/claude-sonnet-4',
-                messages: [
-                  {
-                    role: 'user',
-                    content: [
-                      {
-                        type: 'image',
-                        source: {
-                          type: 'base64',
-                          media_type: 'image/png',
-                          data: base64Image,
-                        },
-                      },
-                      {
-                        type: 'text',
-                        text: 'Extract ALL text from this document image. Preserve the original formatting, paragraphs, and structure as much as possible. Output ONLY the extracted text, nothing else.',
-                      },
-                    ],
-                  },
-                ],
-                max_tokens: 4096,
-              }),
-            });
+              {
+                type: 'text',
+                text: 'Extract ALL text from this PDF document. Preserve the original formatting, paragraphs, numbering, and structure as much as possible. Output ONLY the extracted text content, nothing else. Do not add any commentary or descriptions.',
+              },
+            ],
+          },
+        ],
+        max_tokens: 16000,
+      }),
+    });
 
-            if (!response.ok) {
-              console.error(`Vision OCR failed for page ${pageNum}:`, await response.text());
-              return '';
-            }
-
-            const data = await response.json();
-            return data.choices?.[0]?.message?.content || '';
-          } catch (err) {
-            console.error(`Error processing page ${pageNum}:`, err);
-            return '';
-          }
-        })
-      );
-
-      extractedTexts.push(...batchResults);
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Vision OCR API error:', errorText);
+      throw new Error(`API error: ${response.status}`);
     }
 
-    const fullText = extractedTexts.filter(t => t).join('\n\n--- Page Break ---\n\n');
-    console.log(`Vision OCR complete: ${fullText.length} chars extracted`);
+    const data = await response.json();
+    const extractedText = data.choices?.[0]?.message?.content || '';
 
-    if (!fullText.trim()) {
+    console.log(`Vision OCR complete: ${extractedText.length} chars extracted`);
+
+    if (!extractedText.trim()) {
       throw new Error('Vision OCR could not extract text from the document');
     }
 
-    return fullText;
+    return extractedText;
   } catch (error) {
     console.error('Vision OCR error:', error);
     throw new Error(`PDF OCR failed: ${error instanceof Error ? error.message : 'Unknown error'}`);

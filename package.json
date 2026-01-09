@@ -9,7 +9,6 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@napi-rs/canvas": "^0.1.88",
     "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.90.1",
     "@types/diff-match-patch": "^1.0.36",
